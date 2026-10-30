@@ -172,13 +172,27 @@ var _ = Describe("PreflightController", func() {
 
 				// check calls (all checks enabled)
 				mockCvBuilder.EXPECT().New(gomock.Any()).Return(mockCv).AnyTimes()
-				mockCv.EXPECT().GetClusterVersion().Return(&configv1.ClusterVersion{}, nil)
+				mockCv.EXPECT().GetClusterVersion().Return(&configv1.ClusterVersion{}, nil).Times(2) // ClusterVersion + UpgradeableCondition
 				mockMetricsBuilder.EXPECT().NewClient(gomock.Any()).Return(mockMetrics, nil)
 				mockMetrics.EXPECT().Query(gomock.Any()).Return(&metrics.AlertResponse{}, nil)
 				mockCv.EXPECT().HasDegradedOperators().Return(&clusterversion.HasDegradedOperatorsResult{}, nil)
 				mockClient.EXPECT().List(gomock.Any(), gomock.AssignableToTypeOf(&corev1.NodeList{}), gomock.Any()).
 					Return(nil).Times(2) // ManuallyCordonedNodes + NodeUnschedulableTaints
 				mockClient.EXPECT().List(gomock.Any(), gomock.AssignableToTypeOf(&policyv1.PodDisruptionBudgetList{}), gomock.Any()).
+					Return(nil)
+				// PullSecretValid: GetAccessToken reads ClusterVersion + pull-secret Secret
+				mockClient.EXPECT().Get(gomock.Any(), types.NamespacedName{Name: "version"}, gomock.AssignableToTypeOf(&configv1.ClusterVersion{})).
+					Return(nil)
+				mockClient.EXPECT().Get(gomock.Any(), types.NamespacedName{Namespace: "openshift-config", Name: "pull-secret"}, gomock.AssignableToTypeOf(&corev1.Secret{})).
+					DoAndReturn(func(_ context.Context, _ types.NamespacedName, obj interface{}, _ ...interface{}) error {
+						s := obj.(*corev1.Secret)
+						s.Data = map[string][]byte{
+							".dockerconfigjson": []byte(`{"auths":{"cloud.openshift.com":{"auth":"dGVzdA=="}}}`),
+						}
+						return nil
+					})
+				// AdminAcks: reads admin-acks ConfigMap
+				mockClient.EXPECT().Get(gomock.Any(), types.NamespacedName{Namespace: "openshift-config", Name: "admin-acks"}, gomock.AssignableToTypeOf(&corev1.ConfigMap{})).
 					Return(nil)
 
 				// CompletedAt update
@@ -510,6 +524,146 @@ var _ = Describe("PreflightController", func() {
 					Return(fmt.Errorf("list pdb failed"))
 				result := reconciler.checkPodDisruptionBudgets(context.TODO(), log, defaultCheckTimeout)
 				Expect(result.Execution.State).To(Equal(upgradev1alpha1.CheckError))
+			})
+		})
+
+		Context("checkUpgradeableCondition", func() {
+			It("returns Passed when Upgradeable condition is True", func() {
+				mockCvBuilder.EXPECT().New(gomock.Any()).Return(mockCv)
+				mockCv.EXPECT().GetClusterVersion().Return(&configv1.ClusterVersion{
+					Status: configv1.ClusterVersionStatus{
+						Conditions: []configv1.ClusterOperatorStatusCondition{
+							{
+								Type:   configv1.OperatorUpgradeable,
+								Status: configv1.ConditionTrue,
+							},
+						},
+					},
+				}, nil)
+				result := reconciler.checkUpgradeableCondition(context.TODO(), log, defaultCheckTimeout)
+				Expect(result.Execution.State).To(Equal(upgradev1alpha1.CheckCompleted))
+				Expect(result.Result.Verdict).To(Equal(upgradev1alpha1.CheckPassed))
+			})
+
+			It("returns Failed when Upgradeable condition is False", func() {
+				mockCvBuilder.EXPECT().New(gomock.Any()).Return(mockCv)
+				mockCv.EXPECT().GetClusterVersion().Return(&configv1.ClusterVersion{
+					Status: configv1.ClusterVersionStatus{
+						Conditions: []configv1.ClusterOperatorStatusCondition{
+							{
+								Type:    configv1.OperatorUpgradeable,
+								Status:  configv1.ConditionFalse,
+								Reason:  "AdminAckRequired",
+								Message: "Kubernetes 1.25 and therefore OpenShift 4.12 remove several APIs",
+							},
+						},
+					},
+				}, nil)
+				result := reconciler.checkUpgradeableCondition(context.TODO(), log, defaultCheckTimeout)
+				Expect(result.Execution.State).To(Equal(upgradev1alpha1.CheckCompleted))
+				Expect(result.Result.Verdict).To(Equal(upgradev1alpha1.CheckFailed))
+				Expect(result.Result.Message).To(ContainSubstring("AdminAckRequired"))
+				Expect(result.Result.Details).To(ContainElement(ContainSubstring("AdminAckRequired")))
+			})
+
+			It("returns Error when GetClusterVersion fails", func() {
+				mockCvBuilder.EXPECT().New(gomock.Any()).Return(mockCv)
+				mockCv.EXPECT().GetClusterVersion().Return(nil, fmt.Errorf("cvo unavailable"))
+				result := reconciler.checkUpgradeableCondition(context.TODO(), log, defaultCheckTimeout)
+				Expect(result.Execution.State).To(Equal(upgradev1alpha1.CheckError))
+				Expect(result.Execution.Error).To(ContainSubstring("cvo unavailable"))
+			})
+		})
+
+		Context("checkPullSecretValid", func() {
+			It("returns Passed when pull secret is valid", func() {
+				mockClient.EXPECT().Get(gomock.Any(), types.NamespacedName{Name: "version"}, gomock.AssignableToTypeOf(&configv1.ClusterVersion{})).
+					Return(nil)
+				mockClient.EXPECT().Get(gomock.Any(), types.NamespacedName{Namespace: "openshift-config", Name: "pull-secret"}, gomock.AssignableToTypeOf(&corev1.Secret{})).
+					DoAndReturn(func(_ context.Context, _ types.NamespacedName, obj interface{}, _ ...interface{}) error {
+						s := obj.(*corev1.Secret)
+						s.Data = map[string][]byte{
+							".dockerconfigjson": []byte(`{"auths":{"cloud.openshift.com":{"auth":"dGVzdA=="}}}`),
+						}
+						return nil
+					})
+				result := reconciler.checkPullSecretValid(context.TODO(), log, defaultCheckTimeout)
+				Expect(result.Execution.State).To(Equal(upgradev1alpha1.CheckCompleted))
+				Expect(result.Result.Verdict).To(Equal(upgradev1alpha1.CheckPassed))
+			})
+
+			It("returns Failed when pull secret is missing the required auth key", func() {
+				mockClient.EXPECT().Get(gomock.Any(), types.NamespacedName{Name: "version"}, gomock.AssignableToTypeOf(&configv1.ClusterVersion{})).
+					Return(nil)
+				mockClient.EXPECT().Get(gomock.Any(), types.NamespacedName{Namespace: "openshift-config", Name: "pull-secret"}, gomock.AssignableToTypeOf(&corev1.Secret{})).
+					DoAndReturn(func(_ context.Context, _ types.NamespacedName, obj interface{}, _ ...interface{}) error {
+						s := obj.(*corev1.Secret)
+						s.Data = map[string][]byte{
+							".dockerconfigjson": []byte(`{"auths":{"registry.redhat.io":{"auth":"dGVzdA=="}}}`),
+						}
+						return nil
+					})
+				result := reconciler.checkPullSecretValid(context.TODO(), log, defaultCheckTimeout)
+				Expect(result.Execution.State).To(Equal(upgradev1alpha1.CheckCompleted))
+				Expect(result.Result.Verdict).To(Equal(upgradev1alpha1.CheckFailed))
+				Expect(result.Result.Message).To(ContainSubstring("pull secret"))
+			})
+
+			It("returns Failed when pull secret Secret does not exist", func() {
+				mockClient.EXPECT().Get(gomock.Any(), types.NamespacedName{Name: "version"}, gomock.AssignableToTypeOf(&configv1.ClusterVersion{})).
+					Return(nil)
+				mockClient.EXPECT().Get(gomock.Any(), types.NamespacedName{Namespace: "openshift-config", Name: "pull-secret"}, gomock.AssignableToTypeOf(&corev1.Secret{})).
+					Return(fmt.Errorf("cannot fetch pull secret: secret not found"))
+				result := reconciler.checkPullSecretValid(context.TODO(), log, defaultCheckTimeout)
+				Expect(result.Execution.State).To(Equal(upgradev1alpha1.CheckCompleted))
+				Expect(result.Result.Verdict).To(Equal(upgradev1alpha1.CheckFailed))
+			})
+		})
+
+		Context("checkAdminAcks", func() {
+			It("returns Passed when admin-acks ConfigMap exists with entries", func() {
+				mockClient.EXPECT().Get(gomock.Any(), types.NamespacedName{Namespace: "openshift-config", Name: "admin-acks"}, gomock.AssignableToTypeOf(&corev1.ConfigMap{})).
+					DoAndReturn(func(_ context.Context, _ types.NamespacedName, obj interface{}, _ ...interface{}) error {
+						cm := obj.(*corev1.ConfigMap)
+						cm.Data = map[string]string{
+							"ack-4.16-kube-1.29-api-removals-in-4.17": "true",
+						}
+						return nil
+					})
+				result := reconciler.checkAdminAcks(context.TODO(), instance, log, defaultCheckTimeout)
+				Expect(result.Execution.State).To(Equal(upgradev1alpha1.CheckCompleted))
+				Expect(result.Result.Verdict).To(Equal(upgradev1alpha1.CheckPassed))
+				Expect(result.Result.Details).To(HaveLen(1))
+			})
+
+			It("returns Failed when admin-acks ConfigMap is missing and target is set", func() {
+				mockClient.EXPECT().Get(gomock.Any(), types.NamespacedName{Namespace: "openshift-config", Name: "admin-acks"}, gomock.AssignableToTypeOf(&corev1.ConfigMap{})).
+					Return(apierrors.NewNotFound(schema.GroupResource{Resource: "configmaps"}, "admin-acks"))
+				result := reconciler.checkAdminAcks(context.TODO(), instance, log, defaultCheckTimeout)
+				Expect(result.Execution.State).To(Equal(upgradev1alpha1.CheckCompleted))
+				Expect(result.Result.Verdict).To(Equal(upgradev1alpha1.CheckFailed))
+				Expect(result.Result.Message).To(ContainSubstring("not found"))
+			})
+
+			It("returns Failed when admin-acks ConfigMap exists but is empty", func() {
+				mockClient.EXPECT().Get(gomock.Any(), types.NamespacedName{Namespace: "openshift-config", Name: "admin-acks"}, gomock.AssignableToTypeOf(&corev1.ConfigMap{})).
+					DoAndReturn(func(_ context.Context, _ types.NamespacedName, obj interface{}, _ ...interface{}) error {
+						cm := obj.(*corev1.ConfigMap)
+						cm.Data = map[string]string{}
+						return nil
+					})
+				result := reconciler.checkAdminAcks(context.TODO(), instance, log, defaultCheckTimeout)
+				Expect(result.Execution.State).To(Equal(upgradev1alpha1.CheckCompleted))
+				Expect(result.Result.Verdict).To(Equal(upgradev1alpha1.CheckFailed))
+				Expect(result.Result.Message).To(ContainSubstring("no entries"))
+			})
+
+			It("returns Error when ConfigMap read fails with non-NotFound error", func() {
+				mockClient.EXPECT().Get(gomock.Any(), types.NamespacedName{Namespace: "openshift-config", Name: "admin-acks"}, gomock.AssignableToTypeOf(&corev1.ConfigMap{})).
+					Return(fmt.Errorf("unexpected API error"))
+				result := reconciler.checkAdminAcks(context.TODO(), instance, log, defaultCheckTimeout)
+				Expect(result.Execution.State).To(Equal(upgradev1alpha1.CheckError))
+				Expect(result.Execution.Error).To(ContainSubstring("unexpected API error"))
 			})
 		})
 	})

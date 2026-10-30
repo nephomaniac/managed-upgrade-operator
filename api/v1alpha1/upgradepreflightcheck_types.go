@@ -21,7 +21,8 @@ type UpgradePreflightCheckSpec struct {
 	// Checks is an optional allowlist of check names to run. When empty, all checks run.
 	// Checks not in this list are recorded with State=Skipped.
 	// Valid names: ClusterVersion, CriticalAlerts, ClusterOperators,
-	//              ManuallyCordonedNodes, NodeUnschedulableTaints, PodDisruptionBudgets
+	//              ManuallyCordonedNodes, NodeUnschedulableTaints, PodDisruptionBudgets,
+	//              UpgradeableCondition, PullSecretValid, AdminAcks
 	// +kubebuilder:validation:Optional
 	Checks []string `json:"checks,omitempty"`
 }

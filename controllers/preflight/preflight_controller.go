@@ -7,17 +7,20 @@ import (
 	"time"
 
 	"github.com/go-logr/logr"
+	configv1 "github.com/openshift/api/config/v1"
 	upgradev1alpha1 "github.com/openshift/managed-upgrade-operator/api/v1alpha1"
 	muocfg "github.com/openshift/managed-upgrade-operator/config"
 	cv "github.com/openshift/managed-upgrade-operator/pkg/clusterversion"
 	"github.com/openshift/managed-upgrade-operator/pkg/configmanager"
 	"github.com/openshift/managed-upgrade-operator/pkg/machinery"
 	"github.com/openshift/managed-upgrade-operator/pkg/metrics"
+	"github.com/openshift/managed-upgrade-operator/util"
 	corev1 "k8s.io/api/core/v1"
 	policyv1 "k8s.io/api/policy/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -45,6 +48,9 @@ var allChecks = []string{
 	"ManuallyCordonedNodes",
 	"NodeUnschedulableTaints",
 	"PodDisruptionBudgets",
+	"UpgradeableCondition",
+	"PullSecretValid",
+	"AdminAcks",
 }
 
 type preflightGateConfig struct {
@@ -167,6 +173,11 @@ func (r *ReconcileUpgradePreflightCheck) runChecks(
 		"ManuallyCordonedNodes":   func() upgradev1alpha1.PreflightCheckResult { return r.checkManuallyCordonedNodes(ctx, logger, timeout) },
 		"NodeUnschedulableTaints": func() upgradev1alpha1.PreflightCheckResult { return r.checkNodeTaints(ctx, logger, timeout) },
 		"PodDisruptionBudgets":    func() upgradev1alpha1.PreflightCheckResult { return r.checkPodDisruptionBudgets(ctx, logger, timeout) },
+		"UpgradeableCondition":    func() upgradev1alpha1.PreflightCheckResult { return r.checkUpgradeableCondition(ctx, logger, timeout) },
+		"PullSecretValid":         func() upgradev1alpha1.PreflightCheckResult { return r.checkPullSecretValid(ctx, logger, timeout) },
+		"AdminAcks": func() upgradev1alpha1.PreflightCheckResult {
+			return r.checkAdminAcks(ctx, instance, logger, timeout)
+		},
 	}
 
 	var results []upgradev1alpha1.PreflightCheckResult
@@ -525,6 +536,141 @@ func pdbViolation(pdb policyv1.PodDisruptionBudget) string {
 		}
 	}
 	return ""
+}
+
+// checkUpgradeableCondition checks if the ClusterVersion has Upgradeable=False.
+// When CVO sets this condition, it means an operator or in-cluster state is actively
+// blocking y-stream upgrades (e.g., incompatible operators, missing admin-acks).
+func (r *ReconcileUpgradePreflightCheck) checkUpgradeableCondition(
+	ctx context.Context,
+	logger logr.Logger,
+	timeout time.Duration,
+) upgradev1alpha1.PreflightCheckResult {
+	const checkName = "UpgradeableCondition"
+	logger.Info("Running check", "check", checkName)
+
+	checkCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	_ = checkCtx
+
+	cvClient := r.CvClientBuilder.New(r.Client)
+	clusterVersion, err := cvClient.GetClusterVersion()
+	if err != nil {
+		logger.Error(err, "Check error", "check", checkName)
+		return errorResult(checkName, fmt.Sprintf("unable to get cluster version: %v", err))
+	}
+
+	for _, condition := range clusterVersion.Status.Conditions {
+		if condition.Type == configv1.OperatorUpgradeable && condition.Status == configv1.ConditionFalse {
+			logger.Info("Check failed", "check", checkName, "reason", condition.Reason, "message", condition.Message)
+			return completedResult(checkName, upgradev1alpha1.CheckFinding{
+				Verdict: upgradev1alpha1.CheckFailed,
+				Message: fmt.Sprintf("Upgradeable=False: %s", condition.Reason),
+				Details: []string{
+					fmt.Sprintf("reason=%s", condition.Reason),
+					fmt.Sprintf("message=%s", condition.Message),
+				},
+			})
+		}
+	}
+
+	logger.Info("Check passed", "check", checkName)
+	return completedResult(checkName, upgradev1alpha1.CheckFinding{Verdict: upgradev1alpha1.CheckPassed})
+}
+
+// checkPullSecretValid validates the cluster pull secret exists and has required auth entries.
+func (r *ReconcileUpgradePreflightCheck) checkPullSecretValid(
+	ctx context.Context,
+	logger logr.Logger,
+	timeout time.Duration,
+) upgradev1alpha1.PreflightCheckResult {
+	const checkName = "PullSecretValid"
+	logger.Info("Running check", "check", checkName)
+
+	_, err := util.GetAccessToken(r.Client)
+	if err != nil {
+		logger.Info("Check failed", "check", checkName, "error", err.Error())
+		return completedResult(checkName, upgradev1alpha1.CheckFinding{
+			Verdict: upgradev1alpha1.CheckFailed,
+			Message: fmt.Sprintf("pull secret validation failed: %v", err),
+			Details: []string{err.Error()},
+		})
+	}
+
+	logger.Info("Check passed", "check", checkName)
+	return completedResult(checkName, upgradev1alpha1.CheckFinding{Verdict: upgradev1alpha1.CheckPassed})
+}
+
+// checkAdminAcks checks the admin-acks ConfigMap in openshift-config for required
+// upgrade acknowledgements. For y-stream upgrades, certain API removal acks are required.
+func (r *ReconcileUpgradePreflightCheck) checkAdminAcks(
+	ctx context.Context,
+	instance *upgradev1alpha1.UpgradePreflightCheck,
+	logger logr.Logger,
+	timeout time.Duration,
+) upgradev1alpha1.PreflightCheckResult {
+	const checkName = "AdminAcks"
+	logger.Info("Running check", "check", checkName)
+
+	checkCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	targetVersion := instance.Spec.Desired.Version
+	isYStream := isYStreamUpgrade(targetVersion)
+
+	cm := &corev1.ConfigMap{}
+	err := r.Client.Get(checkCtx, types.NamespacedName{
+		Namespace: "openshift-config",
+		Name:      "admin-acks",
+	}, cm)
+
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			if isYStream {
+				logger.Info("Check failed", "check", checkName, "reason", "admin-acks ConfigMap not found for y-stream upgrade")
+				return completedResult(checkName, upgradev1alpha1.CheckFinding{
+					Verdict: upgradev1alpha1.CheckFailed,
+					Message: "admin-acks ConfigMap not found in openshift-config — required for y-stream upgrades",
+					Details: []string{"ConfigMap openshift-config/admin-acks does not exist"},
+				})
+			}
+			logger.Info("Check passed", "check", checkName, "note", "admin-acks ConfigMap not found (z-stream, not required)")
+			return completedResult(checkName, upgradev1alpha1.CheckFinding{
+				Verdict: upgradev1alpha1.CheckPassed,
+				Details: []string{"admin-acks ConfigMap not found (not required for z-stream)"},
+			})
+		}
+		logger.Error(err, "Check error", "check", checkName)
+		return errorResult(checkName, fmt.Sprintf("unable to read admin-acks ConfigMap: %v", err))
+	}
+
+	var ackKeys []string
+	for k := range cm.Data {
+		ackKeys = append(ackKeys, fmt.Sprintf("%s=%s", k, cm.Data[k]))
+	}
+
+	if isYStream && len(cm.Data) == 0 {
+		logger.Info("Check failed", "check", checkName, "reason", "admin-acks ConfigMap is empty for y-stream upgrade")
+		return completedResult(checkName, upgradev1alpha1.CheckFinding{
+			Verdict: upgradev1alpha1.CheckFailed,
+			Message: "admin-acks ConfigMap exists but has no entries — y-stream upgrades typically require acknowledgements",
+			Details: []string{"ConfigMap openshift-config/admin-acks has no data entries"},
+		})
+	}
+
+	logger.Info("Check passed", "check", checkName, "ackCount", len(ackKeys))
+	return completedResult(checkName, upgradev1alpha1.CheckFinding{
+		Verdict: upgradev1alpha1.CheckPassed,
+		Details: ackKeys,
+	})
+}
+
+// isYStreamUpgrade returns true if the target version string looks like it could
+// be a y-stream (minor version) upgrade. Without the current cluster version to compare,
+// this is a best-effort check — it returns true for any non-empty target version,
+// since admin-acks are cheap to check regardless.
+func isYStreamUpgrade(targetVersion string) bool {
+	return targetVersion != ""
 }
 
 // SetupWithManager registers this controller with the manager.
