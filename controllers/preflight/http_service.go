@@ -305,8 +305,10 @@ func (s *PreflightHTTPServer) buildInternalCR(requestID string, req CheckRequest
 		},
 		Spec: upgradev1alpha1.UpgradePreflightCheckSpec{
 			UpgradeConfigSpec: upgradev1alpha1.UpgradeConfigSpec{
-				Type:    upgradev1alpha1.UpgradeType(req.Platform),
-				Desired: upgradev1alpha1.Update{Version: req.TargetVersion, Channel: req.TargetChannel},
+				Type:                 upgradev1alpha1.UpgradeType(req.Platform),
+				Desired:              upgradev1alpha1.Update{Version: req.TargetVersion, Channel: req.TargetChannel},
+				UpgradeAt:            time.Now().Format(time.RFC3339),
+				PDBForceDrainTimeout: 60,
 			},
 			CheckTimeoutSeconds: req.CheckTimeoutSeconds,
 			Checks:              req.ChecksToRun,

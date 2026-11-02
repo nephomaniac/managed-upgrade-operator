@@ -5,6 +5,8 @@ metadata:
   name: managed-upgrade-operator-preflight
   namespace: openshift-managed-upgrade-operator
   annotations:
+    # PKO phase annotation - deploy this Service in the deploy phase
+    package-operator.run/phase: deploy
     # OpenShift Service Serving CA: automatically provisions and rotates a
     # signed TLS certificate into the secret named below.
     service.beta.openshift.io/serving-cert-secret-name: muo-preflight-tls
