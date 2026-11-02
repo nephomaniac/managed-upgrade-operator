@@ -13,8 +13,10 @@ import (
 	"github.com/go-logr/logr"
 	"github.com/google/uuid"
 	upgradev1alpha1 "github.com/openshift/managed-upgrade-operator/api/v1alpha1"
+	"gopkg.in/yaml.v2"
 	authnv1 "k8s.io/api/authentication/v1"
 	authzv1 "k8s.io/api/authorization/v1"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
@@ -196,6 +198,10 @@ func (s *PreflightHTTPServer) handleCreate(w http.ResponseWriter, r *http.Reques
 	}
 
 	s.Logger.Info("Preflight check created via HTTP", "requestId", requestID, "crName", cr.Name)
+
+	// Warn if feature gate is not enabled (checks won't run)
+	s.warnIfFeatureGateDisabled(ctx, requestID)
+
 	writeJSON(w, http.StatusAccepted, map[string]interface{}{
 		"requestId": requestID,
 		"status":    "accepted",
@@ -264,6 +270,46 @@ func (s *PreflightHTTPServer) handleDelete(w http.ResponseWriter, r *http.Reques
 	}
 	s.Logger.Info("Preflight check deleted via HTTP", "requestId", requestID, "crName", cr.Name)
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// warnIfFeatureGateDisabled checks if the PreflightController feature gate is enabled
+// and logs a warning if not, helping users debug why their checks aren't running.
+func (s *PreflightHTTPServer) warnIfFeatureGateDisabled(ctx context.Context, requestID string) {
+	cm := &corev1.ConfigMap{}
+	if err := s.Client.Get(ctx, client.ObjectKey{
+		Namespace: s.Namespace,
+		Name:      "managed-upgrade-operator-config",
+	}, cm); err != nil {
+		// ConfigMap not found or error - skip check (don't block request)
+		return
+	}
+
+	configYAML, ok := cm.Data["config.yaml"]
+	if !ok {
+		return
+	}
+
+	var config struct {
+		FeatureGate struct {
+			Enabled []string `yaml:"enabled"`
+		} `yaml:"featureGate"`
+	}
+
+	if err := yaml.Unmarshal([]byte(configYAML), &config); err != nil {
+		return
+	}
+
+	// Check if PreflightController is enabled
+	for _, f := range config.FeatureGate.Enabled {
+		if f == "PreflightController" {
+			return // Feature gate enabled, all good
+		}
+	}
+
+	// Feature gate not enabled - warn user
+	s.Logger.Info("PreflightController feature gate not enabled - check will remain pending until enabled",
+		"requestId", requestID,
+		"help", "Add 'PreflightController' to featureGate.enabled in managed-upgrade-operator-config ConfigMap and restart the operator")
 }
 
 // cleanupExpiredChecks deletes preflight checks that have passed their TTL.
