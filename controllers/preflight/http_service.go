@@ -346,10 +346,10 @@ func (s *PreflightHTTPServer) cleanupExpiredChecks(ctx context.Context) {
 	}
 }
 
-// checkActiveLimit enforces a maximum of 2 active preflight checks to prevent resource exhaustion.
+// checkActiveLimit enforces a maximum of 10 active preflight checks to prevent resource exhaustion.
 // Returns an error with instructions if the limit is reached.
 func (s *PreflightHTTPServer) checkActiveLimit(ctx context.Context) error {
-	const maxActiveChecks = 2
+	const maxActiveChecks = 10
 	list := &upgradev1alpha1.UpgradePreflightCheckList{}
 	if err := s.Client.List(ctx, list,
 		client.InNamespace(s.Namespace),
