@@ -154,6 +154,8 @@ func (s *PreflightHTTPServer) route(w http.ResponseWriter, r *http.Request) {
 		s.handleGet(w, r, token, requestID)
 	case r.Method == http.MethodGet && requestID == "":
 		s.handleList(w, r, token)
+	case r.Method == http.MethodDelete && requestID != "":
+		s.handleDelete(w, r, token, requestID)
 	default:
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 	}
@@ -173,6 +175,15 @@ func (s *PreflightHTTPServer) handleCreate(w http.ResponseWriter, r *http.Reques
 	}
 	if err := validateCheckRequest(req); err != nil {
 		http.Error(w, "Bad request: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	// Clean up expired checks before enforcing limit (opportunistic cleanup)
+	s.cleanupExpiredChecks(ctx)
+
+	// Enforce limit: max 2 active preflight checks at a time
+	if err := s.checkActiveLimit(ctx); err != nil {
+		http.Error(w, err.Error(), http.StatusTooManyRequests)
 		return
 	}
 
@@ -235,8 +246,79 @@ func (s *PreflightHTTPServer) handleList(w http.ResponseWriter, r *http.Request,
 	})
 }
 
+func (s *PreflightHTTPServer) handleDelete(w http.ResponseWriter, r *http.Request, token, requestID string) {
+	ctx := r.Context()
+	if err := s.authorizeToken(ctx, token, "delete"); err != nil {
+		http.Error(w, "Forbidden: "+err.Error(), http.StatusForbidden)
+		return
+	}
+	cr, err := s.findCR(ctx, requestID)
+	if err != nil {
+		http.Error(w, "Not found", http.StatusNotFound)
+		return
+	}
+	if err := s.Client.Delete(ctx, cr); err != nil {
+		s.Logger.Error(err, "Failed to delete UpgradePreflightCheck", "requestId", requestID)
+		http.Error(w, "Internal error deleting preflight check", http.StatusInternalServerError)
+		return
+	}
+	s.Logger.Info("Preflight check deleted via HTTP", "requestId", requestID, "crName", cr.Name)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// cleanupExpiredChecks deletes preflight checks that have passed their TTL.
+// This runs opportunistically when new requests come in to avoid resource buildup.
+func (s *PreflightHTTPServer) cleanupExpiredChecks(ctx context.Context) {
+	list := &upgradev1alpha1.UpgradePreflightCheckList{}
+	if err := s.Client.List(ctx, list,
+		client.InNamespace(s.Namespace),
+		client.HasLabels{requestIDLabel},
+	); err != nil {
+		s.Logger.Error(err, "Failed to list checks for cleanup")
+		return
+	}
+
+	now := time.Now()
+	for i := range list.Items {
+		cr := &list.Items[i]
+		deleteAfter := cr.Annotations["preflight.managed.openshift.io/delete-after"]
+		if deleteAfter == "" {
+			continue
+		}
+		expiryTime, err := time.Parse(time.RFC3339, deleteAfter)
+		if err != nil {
+			s.Logger.Error(err, "Invalid delete-after annotation", "crName", cr.Name, "deleteAfter", deleteAfter)
+			continue
+		}
+		if now.After(expiryTime) {
+			if err := s.Client.Delete(ctx, cr); err != nil {
+				s.Logger.Error(err, "Failed to delete expired check", "crName", cr.Name)
+			} else {
+				s.Logger.Info("Deleted expired preflight check", "crName", cr.Name, "expiry", deleteAfter)
+			}
+		}
+	}
+}
+
+// checkActiveLimit enforces a maximum of 2 active preflight checks to prevent resource exhaustion.
+// Returns an error with instructions if the limit is reached.
+func (s *PreflightHTTPServer) checkActiveLimit(ctx context.Context) error {
+	const maxActiveChecks = 2
+	list := &upgradev1alpha1.UpgradePreflightCheckList{}
+	if err := s.Client.List(ctx, list,
+		client.InNamespace(s.Namespace),
+		client.HasLabels{requestIDLabel},
+	); err != nil {
+		return fmt.Errorf("internal error checking active checks: %w", err)
+	}
+	if len(list.Items) >= maxActiveChecks {
+		return fmt.Errorf("too many active preflight checks (%d/%d). List existing checks with GET /api/v1/preflight-checks and delete completed ones with DELETE /api/v1/preflight-checks/{id} before creating new checks", len(list.Items), maxActiveChecks)
+	}
+	return nil
+}
+
 // authorizeToken performs TokenReview (authn) then SubjectAccessReview (authz).
-// verb should be "create", "get", or "list".
+// verb should be "create", "get", "list", or "delete".
 func (s *PreflightHTTPServer) authorizeToken(ctx context.Context, token, verb string) error {
 	tr := &authnv1.TokenReview{Spec: authnv1.TokenReviewSpec{Token: token}}
 	if err := s.Client.Create(ctx, tr); err != nil {
@@ -292,7 +374,10 @@ func (s *PreflightHTTPServer) findCR(ctx context.Context, requestID string) (*up
 }
 
 func (s *PreflightHTTPServer) buildInternalCR(requestID string, req CheckRequest) *upgradev1alpha1.UpgradePreflightCheck {
-	annotations := map[string]string{}
+	annotations := map[string]string{
+		// Auto-delete after 24 hours to prevent resource buildup
+		"preflight.managed.openshift.io/delete-after": time.Now().Add(24 * time.Hour).Format(time.RFC3339),
+	}
 	if req.Description != "" {
 		annotations["preflight.managed.openshift.io/description"] = req.Description
 	}
