@@ -32,7 +32,7 @@ spec:
         image:
           description: Operator image to deploy
           type: string
-          default: None
+          default: quay.io/maclark/managed-upgrade-operator:ux-descriptions-v2
       type: object
 test:
   template:

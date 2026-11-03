@@ -4,6 +4,7 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.20.1
+    package-operator.run/phase: crds
   name: upgradepreflightchecks.upgrade.managed.openshift.io
 spec:
   group: upgrade.managed.openshift.io

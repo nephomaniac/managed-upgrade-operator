@@ -68,10 +68,16 @@ type CheckResponse struct {
 
 // CheckResult is a per-check entry within CheckResponse.
 type CheckResult struct {
-	Name    string   `json:"name"`
-	Status  string   `json:"status"`
-	Message string   `json:"message,omitempty"`
-	Details []string `json:"details,omitempty"`
+	Name      string               `json:"name"`
+	Execution CheckResultExecution `json:"execution"`
+	Status    string               `json:"status"`
+	Message   string               `json:"message,omitempty"`
+	Details   []string             `json:"details,omitempty"`
+}
+
+// CheckResultExecution holds execution metadata for a check result.
+type CheckResultExecution struct {
+	Description string `json:"description,omitempty"`
 }
 
 // PreflightHTTPServer serves the preflight check HTTP API.
@@ -469,7 +475,12 @@ func buildResponse(requestID string, cr *upgradev1alpha1.UpgradePreflightCheck) 
 
 	anyBad := false
 	for _, c := range cr.Status.Checks {
-		r := CheckResult{Name: c.Name}
+		r := CheckResult{
+			Name: c.Name,
+			Execution: CheckResultExecution{
+				Description: c.Execution.Description,
+			},
+		}
 		switch c.Execution.State {
 		case upgradev1alpha1.CheckCompleted:
 			resp.ChecksCompleted++
