@@ -575,7 +575,10 @@ func (r *ReconcileUpgradePreflightCheck) checkUpgradeableCondition(
 	}
 
 	logger.Info("Check passed", "check", checkName)
-	return completedResult(checkName, upgradev1alpha1.CheckFinding{Verdict: upgradev1alpha1.CheckPassed})
+	return completedResult(checkName, upgradev1alpha1.CheckFinding{
+		Verdict: upgradev1alpha1.CheckPassed,
+		Message: "Cluster Upgradeable condition is True - no upgrade blockers detected",
+	})
 }
 
 // checkPullSecretValid validates the cluster pull secret exists and has required auth entries.
@@ -598,7 +601,10 @@ func (r *ReconcileUpgradePreflightCheck) checkPullSecretValid(
 	}
 
 	logger.Info("Check passed", "check", checkName)
-	return completedResult(checkName, upgradev1alpha1.CheckFinding{Verdict: upgradev1alpha1.CheckPassed})
+	return completedResult(checkName, upgradev1alpha1.CheckFinding{
+		Verdict: upgradev1alpha1.CheckPassed,
+		Message: "Pull secret contains required cloud.openshift.com authentication",
+	})
 }
 
 // checkAdminAcks checks the admin-acks ConfigMap in openshift-config for required
@@ -615,29 +621,43 @@ func (r *ReconcileUpgradePreflightCheck) checkAdminAcks(
 	checkCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
+	// Get current cluster version to determine if this is a y-stream upgrade
+	cvClient := r.CvClientBuilder.New(r.Client)
+	clusterVersion, err := cvClient.GetClusterVersion()
+	if err != nil {
+		logger.Error(err, "Check error", "check", checkName, "reason", "unable to get cluster version")
+		return errorResult(checkName, fmt.Sprintf("unable to get cluster version: %v", err))
+	}
+
+	currentVersion := ""
+	if clusterVersion != nil {
+		currentVersion = clusterVersion.Status.Desired.Version
+	}
+
 	targetVersion := instance.Spec.Desired.Version
-	isYStream := isYStreamUpgrade(targetVersion)
+	isYStream := isYStreamUpgrade(currentVersion, targetVersion)
+	logger.Info("Checking admin-acks", "currentVersion", currentVersion, "targetVersion", targetVersion, "isYStream", isYStream)
 
 	cm := &corev1.ConfigMap{}
-	err := r.Client.Get(checkCtx, types.NamespacedName{
+	err = r.Client.Get(checkCtx, types.NamespacedName{
 		Namespace: "openshift-config",
 		Name:      "admin-acks",
 	}, cm)
 
 	if err != nil {
 		if apierrors.IsNotFound(err) {
+			// ConfigMap doesn't exist - this is only a problem if it's actually required
+			// We pass with informational message since we can't determine if acks are required
+			// without checking specific release notes for the target version
+			msg := "admin-acks ConfigMap not found in openshift-config"
 			if isYStream {
-				logger.Info("Check failed", "check", checkName, "reason", "admin-acks ConfigMap not found for y-stream upgrade")
-				return completedResult(checkName, upgradev1alpha1.CheckFinding{
-					Verdict: upgradev1alpha1.CheckFailed,
-					Message: "admin-acks ConfigMap not found in openshift-config — required for y-stream upgrades",
-					Details: []string{"ConfigMap openshift-config/admin-acks does not exist"},
-				})
+				msg += " — if this upgrade removes APIs, acknowledgements may be required. Check release notes."
 			}
-			logger.Info("Check passed", "check", checkName, "note", "admin-acks ConfigMap not found (z-stream, not required)")
+			logger.Info("Check passed", "check", checkName, "note", msg)
 			return completedResult(checkName, upgradev1alpha1.CheckFinding{
 				Verdict: upgradev1alpha1.CheckPassed,
-				Details: []string{"admin-acks ConfigMap not found (not required for z-stream)"},
+				Message: msg,
+				Details: []string{"ConfigMap openshift-config/admin-acks does not exist"},
 			})
 		}
 		logger.Error(err, "Check error", "check", checkName)
@@ -649,11 +669,16 @@ func (r *ReconcileUpgradePreflightCheck) checkAdminAcks(
 		ackKeys = append(ackKeys, fmt.Sprintf("%s=%s", k, cm.Data[k]))
 	}
 
-	if isYStream && len(cm.Data) == 0 {
-		logger.Info("Check failed", "check", checkName, "reason", "admin-acks ConfigMap is empty for y-stream upgrade")
+	// ConfigMap exists - report current state
+	if len(cm.Data) == 0 {
+		msg := "admin-acks ConfigMap is empty"
+		if isYStream {
+			msg += " — if this upgrade removes APIs, acknowledgements may be required. Check release notes."
+		}
+		logger.Info("Check passed", "check", checkName, "note", "ConfigMap is empty")
 		return completedResult(checkName, upgradev1alpha1.CheckFinding{
-			Verdict: upgradev1alpha1.CheckFailed,
-			Message: "admin-acks ConfigMap exists but has no entries — y-stream upgrades typically require acknowledgements",
+			Verdict: upgradev1alpha1.CheckPassed,
+			Message: msg,
 			Details: []string{"ConfigMap openshift-config/admin-acks has no data entries"},
 		})
 	}
@@ -661,16 +686,36 @@ func (r *ReconcileUpgradePreflightCheck) checkAdminAcks(
 	logger.Info("Check passed", "check", checkName, "ackCount", len(ackKeys))
 	return completedResult(checkName, upgradev1alpha1.CheckFinding{
 		Verdict: upgradev1alpha1.CheckPassed,
+		Message: fmt.Sprintf("Found %d admin acknowledgement(s)", len(ackKeys)),
 		Details: ackKeys,
 	})
 }
 
-// isYStreamUpgrade returns true if the target version string looks like it could
-// be a y-stream (minor version) upgrade. Without the current cluster version to compare,
-// this is a best-effort check — it returns true for any non-empty target version,
-// since admin-acks are cheap to check regardless.
-func isYStreamUpgrade(targetVersion string) bool {
-	return targetVersion != ""
+// isYStreamUpgrade returns true if the upgrade is a y-stream (minor version) upgrade.
+// Y-stream: 4.14.x → 4.15.y (minor version changes)
+// Z-stream: 4.15.1 → 4.15.3 (patch version changes)
+func isYStreamUpgrade(currentVersion, targetVersion string) bool {
+	if currentVersion == "" || targetVersion == "" {
+		// If we can't determine versions, assume it could be y-stream (conservative)
+		return targetVersion != ""
+	}
+
+	// Parse semantic versions (format: major.minor.patch)
+	currentParts := strings.Split(currentVersion, ".")
+	targetParts := strings.Split(targetVersion, ".")
+
+	if len(currentParts) < 2 || len(targetParts) < 2 {
+		// Can't parse version properly, assume y-stream
+		return true
+	}
+
+	// Compare major.minor (first two components)
+	// Y-stream = minor version changes (4.14 → 4.15)
+	// Z-stream = patch version changes (4.15.1 → 4.15.3)
+	currentMinor := currentParts[0] + "." + currentParts[1]
+	targetMinor := targetParts[0] + "." + targetParts[1]
+
+	return currentMinor != targetMinor
 }
 
 // SetupWithManager registers this controller with the manager.
