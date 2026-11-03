@@ -517,19 +517,25 @@ status:
     result:
       verdict: Passed
   - name: ClusterOperators
-    # ... (6 checks total)
+    # ... (9 checks total)
   completedAt: "2026-11-02T23:45:00Z"
   startedAt: "2026-11-02T23:44:59Z"
 ```
 
-### The 6 Preflight Checks
+### The 9 Preflight Checks
 
+**Original 6 checks:**
 1. **ClusterVersion** - Verifies cluster version
 2. **CriticalAlerts** - Checks for blocking critical alerts
 3. **ClusterOperators** - Ensures all cluster operators are healthy
 4. **ManuallyCordonedNodes** - Detects manually cordoned nodes
 5. **NodeUnschedulableTaints** - Checks for unschedulable node taints
 6. **PodDisruptionBudgets** - Validates PDBs won't block upgrade
+
+**New checks (from PR #2):**
+7. **UpgradeableCondition** - Checks CVO Upgradeable=False condition, surfaces reasons (AdminAckRequired, incompatible operators)
+8. **PullSecretValid** - Validates pull-secret has required cloud.openshift.com auth entry
+9. **AdminAcks** - Reads admin-acks ConfigMap, reports if missing when target version specified
 
 ### Check TTL Annotations
 
@@ -737,7 +743,7 @@ curl -k -X POST https://localhost:8443/api/v1/preflight-checks \
 
 ### ✅ Preflight Checks Running
 - [ ] CR status updates within 5 seconds
-- [ ] All 6 checks execute: ClusterVersion, CriticalAlerts, ClusterOperators, ManuallyCordonedNodes, NodeUnschedulableTaints, PodDisruptionBudgets
+- [ ] All 9 checks execute: ClusterVersion, CriticalAlerts, ClusterOperators, ManuallyCordonedNodes, NodeUnschedulableTaints, PodDisruptionBudgets, UpgradeableCondition, PullSecretValid, AdminAcks
 - [ ] Verdict: Passed or Failed (with details)
 - [ ] Execution state: Completed (or Error/Skipped where appropriate)
 - [ ] Timestamps: startedAt and completedAt populated
