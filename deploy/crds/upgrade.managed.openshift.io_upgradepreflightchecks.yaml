@@ -1,0 +1,204 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.20.1
+  name: upgradepreflightchecks.upgrade.managed.openshift.io
+spec:
+  group: upgrade.managed.openshift.io
+  names:
+    kind: UpgradePreflightCheck
+    listKind: UpgradePreflightCheckList
+    plural: upgradepreflightchecks
+    shortNames:
+    - pfc
+    singular: upgradepreflightcheck
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.desired.version
+      name: version
+      type: string
+    - jsonPath: .spec.desired.channel
+      name: channel
+      type: string
+    - jsonPath: .spec.type
+      name: type
+      type: string
+    - jsonPath: .status.startedAt
+      name: started
+      type: string
+    - jsonPath: .status.completedAt
+      name: completed
+      type: string
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          UpgradePreflightCheck is the Schema for on-demand cluster upgrade readiness checks.
+          Creating one runs pre-upgrade health checks without scheduling or starting an upgrade.
+          Checks are currently platform-agnostic; type- and version-aware checks are planned.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: |-
+              UpgradePreflightCheckSpec defines the target upgrade to check readiness for.
+              It embeds UpgradeConfigSpec so that all UpgradeConfig fields (type, desired version,
+              PDBForceDrainTimeout, etc.) are inherited automatically. Fields like upgradeAt and
+              capacityReservation are present but unused by the preflight controller.
+            properties:
+              PDBForceDrainTimeout:
+                description: The maximum grace period granted to a node whose drain
+                  is blocked by a Pod Disruption Budget, before that drain is forced.
+                  Measured in minutes. The minimum accepted value is 0 and in this
+                  case it will trigger force drain after the expectedNodeDrainTime
+                  lapsed.
+                format: int32
+                minimum: 0
+                type: integer
+              capacityReservation:
+                description: Specify if scaling up an extra node for capacity reservation
+                  before upgrade starts is needed
+                type: boolean
+              checkTimeoutSeconds:
+                default: 30
+                description: |-
+                  CheckTimeoutSeconds is the maximum number of seconds each individual check
+                  may run before it is cancelled and recorded as State=Error.
+                  Defaults to 30 seconds.
+                format: int32
+                type: integer
+              checks:
+                description: |-
+                  Checks is an optional allowlist of check names to run. When empty, all checks run.
+                  Checks not in this list are recorded with State=Skipped.
+                  Valid names: ClusterVersion, CriticalAlerts, ClusterOperators,
+                               ManuallyCordonedNodes, NodeUnschedulableTaints, PodDisruptionBudgets,
+                               UpgradeableCondition, PullSecretValid, AdminAcks
+                items:
+                  type: string
+                type: array
+              desired:
+                description: Specify the desired OpenShift release
+                properties:
+                  channel:
+                    description: Channel used for upgrades
+                    type: string
+                  image:
+                    description: Image reference used for upgrades
+                    type: string
+                  version:
+                    description: Version of openshift release
+                    type: string
+                type: object
+              type:
+                description: Type indicates the ClusterUpgrader implementation to
+                  use to perform an upgrade of the cluster
+                enum:
+                - OSD
+                - ARO
+                type: string
+              upgradeAt:
+                description: Specify the upgrade start time
+                type: string
+            required:
+            - PDBForceDrainTimeout
+            - desired
+            - type
+            - upgradeAt
+            type: object
+          status:
+            description: UpgradePreflightCheckStatus reports the outcome of all checks.
+            properties:
+              checks:
+                items:
+                  description: PreflightCheckResult holds the execution state and
+                    finding for a single preflight check.
+                  properties:
+                    execution:
+                      description: Execution describes whether the check ran successfully.
+                      properties:
+                        description:
+                          description: |-
+                            Description explains what this check validates, why it matters for upgrades,
+                            and what cluster resources it examines. Educational context for cluster administrators.
+                          type: string
+                        error:
+                          description: |-
+                            Error contains the reason a check could not run (State=Error only).
+                            This is an infrastructure/transient failure, not a cluster health finding.
+                          type: string
+                        state:
+                          description: 'State is the execution outcome: Completed,
+                            Error, or Skipped.'
+                          enum:
+                          - Completed
+                          - Error
+                          - Skipped
+                          type: string
+                      required:
+                      - state
+                      type: object
+                    name:
+                      description: Name identifies the check (e.g. "CriticalAlerts",
+                        "ClusterOperators").
+                      type: string
+                    result:
+                      description: Result contains the health finding. Only present
+                        when Execution.State=Completed.
+                      properties:
+                        details:
+                          description: |-
+                            Details contains per-item findings (e.g. individual alert names, node names).
+                            Structured for tooling; parse with jq/yq via .result.details[].
+                          items:
+                            type: string
+                          type: array
+                        message:
+                          description: Message is a human-readable summary of the
+                            finding (present on Failed).
+                          type: string
+                        verdict:
+                          description: Verdict is Passed if the cluster is healthy
+                            for this check, Failed otherwise.
+                          enum:
+                          - Passed
+                          - Failed
+                          type: string
+                      required:
+                      - verdict
+                      type: object
+                  required:
+                  - execution
+                  - name
+                  type: object
+                type: array
+              completedAt:
+                format: date-time
+                type: string
+              startedAt:
+                format: date-time
+                type: string
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

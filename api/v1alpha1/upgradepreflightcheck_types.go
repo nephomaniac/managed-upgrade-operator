@@ -44,6 +44,10 @@ const (
 type CheckExecution struct {
 	// State is the execution outcome: Completed, Error, or Skipped.
 	State CheckExecutionState `json:"state"`
+	// Description explains what this check validates, why it matters for upgrades,
+	// and what cluster resources it examines. Educational context for cluster administrators.
+	// +kubebuilder:validation:Optional
+	Description string `json:"description,omitempty"`
 	// Error contains the reason a check could not run (State=Error only).
 	// This is an infrastructure/transient failure, not a cluster health finding.
 	// +kubebuilder:validation:Optional
