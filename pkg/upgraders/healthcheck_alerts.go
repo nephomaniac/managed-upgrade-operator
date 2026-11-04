@@ -10,6 +10,12 @@ import (
 	"github.com/openshift/managed-upgrade-operator/pkg/metrics"
 )
 
+// CriticalAlertsDefault calls CriticalAlerts with an empty upgrader config (no ignore lists).
+// Used by the preflight controller for baseline checks where no upgrader config is available.
+func CriticalAlertsDefault(metricsClient metrics.Metrics, ug *upgradev1alpha1.UpgradeConfig, logger logr.Logger, version string) (bool, error) {
+	return CriticalAlerts(metricsClient, &upgraderConfig{}, ug, logger, version)
+}
+
 // CriticalAlerts function will check the list of alerts and namespaces to be ignored for healthcheck
 // and filter the critical open firing alerts via the ALERTS metric.
 func CriticalAlerts(metricsClient metrics.Metrics, cfg *upgraderConfig, ug *upgradev1alpha1.UpgradeConfig, logger logr.Logger, version string) (bool, error) {

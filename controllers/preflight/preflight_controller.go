@@ -14,6 +14,7 @@ import (
 	"github.com/openshift/managed-upgrade-operator/pkg/configmanager"
 	"github.com/openshift/managed-upgrade-operator/pkg/machinery"
 	"github.com/openshift/managed-upgrade-operator/pkg/metrics"
+	"github.com/openshift/managed-upgrade-operator/pkg/upgraders"
 	"github.com/openshift/managed-upgrade-operator/util"
 	corev1 "k8s.io/api/core/v1"
 	policyv1 "k8s.io/api/policy/v1"
@@ -43,14 +44,18 @@ var prometheusRetryBase = 2 * time.Second
 // allChecks is the ordered list of check names run when no allowlist is specified.
 var allChecks = []string{
 	"ClusterVersion",
-	"CriticalAlerts",
-	"ClusterOperators",
-	"ManuallyCordonedNodes",
-	"NodeUnschedulableTaints",
-	"PodDisruptionBudgets",
-	"UpgradeableCondition",
-	"PullSecretValid",
-	"AdminAcks",
+	"ClusterOperators",             // Baseline: calls upgraders.ClusterOperators()
+	"ClusterOperatorsExtended",     // Comprehensive: checks all degraded operators
+	"CriticalAlerts",               // Baseline: calls upgraders.CriticalAlertsDefault()
+	"CriticalAlertsExtended",       // Comprehensive: direct Prometheus query with retry
+	"PodDisruptionBudgetsExtended", // Comprehensive: cluster-wide PDB drain-block detection
+	"ManuallyCordonedNodes",        // Baseline: calls upgraders.ManuallyCordonedNodes()
+	"ManuallyCordonedNodesExtended", // Comprehensive: all cordoned worker nodes
+	"NodeUnschedulableTaints",      // Baseline: calls upgraders.NodeUnschedulableTaints()
+	"NodeUnschedulableTaintsExtended", // Comprehensive: memory/disk/PID pressure taints
+	"UpgradeableCondition",         // Standalone
+	"PullSecretValid",              // Standalone
+	"AdminAcks",                    // Standalone
 }
 
 type preflightGateConfig struct {
@@ -167,14 +172,42 @@ func (r *ReconcileUpgradePreflightCheck) runChecks(
 	timeout := checkTimeout(instance)
 
 	dispatch := map[string]func() upgradev1alpha1.PreflightCheckResult{
-		"ClusterVersion":          func() upgradev1alpha1.PreflightCheckResult { return r.checkClusterVersion(ctx, logger, timeout) },
-		"CriticalAlerts":          func() upgradev1alpha1.PreflightCheckResult { return r.checkCriticalAlerts(ctx, logger, timeout) },
-		"ClusterOperators":        func() upgradev1alpha1.PreflightCheckResult { return r.checkClusterOperators(ctx, logger, timeout) },
-		"ManuallyCordonedNodes":   func() upgradev1alpha1.PreflightCheckResult { return r.checkManuallyCordonedNodes(ctx, logger, timeout) },
-		"NodeUnschedulableTaints": func() upgradev1alpha1.PreflightCheckResult { return r.checkNodeTaints(ctx, logger, timeout) },
-		"PodDisruptionBudgets":    func() upgradev1alpha1.PreflightCheckResult { return r.checkPodDisruptionBudgets(ctx, logger, timeout) },
-		"UpgradeableCondition":    func() upgradev1alpha1.PreflightCheckResult { return r.checkUpgradeableCondition(ctx, logger, timeout) },
-		"PullSecretValid":         func() upgradev1alpha1.PreflightCheckResult { return r.checkPullSecretValid(ctx, logger, timeout) },
+		"ClusterVersion": func() upgradev1alpha1.PreflightCheckResult {
+			return r.checkClusterVersion(ctx, logger, timeout)
+		},
+		"ClusterOperators": func() upgradev1alpha1.PreflightCheckResult {
+			return r.checkClusterOperators(ctx, logger, timeout)
+		},
+		"ClusterOperatorsExtended": func() upgradev1alpha1.PreflightCheckResult {
+			return r.checkClusterOperatorsExtended(ctx, logger, timeout)
+		},
+		"CriticalAlerts": func() upgradev1alpha1.PreflightCheckResult {
+			return r.checkCriticalAlerts(ctx, logger, timeout)
+		},
+		"CriticalAlertsExtended": func() upgradev1alpha1.PreflightCheckResult {
+			return r.checkCriticalAlertsExtended(ctx, logger, timeout)
+		},
+		"PodDisruptionBudgetsExtended": func() upgradev1alpha1.PreflightCheckResult {
+			return r.checkPodDisruptionBudgetsExtended(ctx, logger, timeout)
+		},
+		"ManuallyCordonedNodes": func() upgradev1alpha1.PreflightCheckResult {
+			return r.checkManuallyCordonedNodes(ctx, logger, timeout)
+		},
+		"ManuallyCordonedNodesExtended": func() upgradev1alpha1.PreflightCheckResult {
+			return r.checkManuallyCordonedNodesExtended(ctx, logger, timeout)
+		},
+		"NodeUnschedulableTaints": func() upgradev1alpha1.PreflightCheckResult {
+			return r.checkNodeTaints(ctx, logger, timeout)
+		},
+		"NodeUnschedulableTaintsExtended": func() upgradev1alpha1.PreflightCheckResult {
+			return r.checkNodeTaintsExtended(ctx, logger, timeout)
+		},
+		"UpgradeableCondition": func() upgradev1alpha1.PreflightCheckResult {
+			return r.checkUpgradeableCondition(ctx, logger, timeout)
+		},
+		"PullSecretValid": func() upgradev1alpha1.PreflightCheckResult {
+			return r.checkPullSecretValid(ctx, logger, timeout)
+		},
 		"AdminAcks": func() upgradev1alpha1.PreflightCheckResult {
 			return r.checkAdminAcks(ctx, instance, logger, timeout)
 		},
@@ -253,6 +286,28 @@ func errorResult(name, errMsg string) upgradev1alpha1.PreflightCheckResult {
 	}
 }
 
+// createFakeUpgradeConfig creates a minimal UpgradeConfig for calling baseline upgrade validation functions.
+func createFakeUpgradeConfig(targetVersion string) *upgradev1alpha1.UpgradeConfig {
+	return &upgradev1alpha1.UpgradeConfig{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "preflight-check",
+		},
+		Spec: upgradev1alpha1.UpgradeConfigSpec{
+			Desired: upgradev1alpha1.Update{
+				Version: targetVersion,
+			},
+		},
+		Status: upgradev1alpha1.UpgradeConfigStatus{
+			History: upgradev1alpha1.UpgradeHistories{
+				{
+					Version: targetVersion,
+					Phase:   upgradev1alpha1.UpgradePhaseNew,
+				},
+			},
+		},
+	}
+}
+
 // checkClusterVersion reads the current cluster version from CVO.
 // This check always passes and is informational — it validates the check
 // architecture and provides baseline context alongside health checks.
@@ -286,13 +341,132 @@ func (r *ReconcileUpgradePreflightCheck) checkClusterVersion(
 	})
 }
 
-// checkCriticalAlerts queries Prometheus for firing critical alerts in core namespaces.
+// checkClusterOperators is a baseline wrapper that calls upgraders.ClusterOperators(),
+// the exact function the upgrade process uses for cluster operator validation.
+func (r *ReconcileUpgradePreflightCheck) checkClusterOperators(
+	ctx context.Context,
+	logger logr.Logger,
+	timeout time.Duration,
+) upgradev1alpha1.PreflightCheckResult {
+	const checkName = "ClusterOperators"
+	logger.Info("Running baseline check", "check", checkName)
+
+	checkCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	_ = checkCtx
+
+	metricsClient, err := r.MetricsClientBuilder.NewClient(r.Client)
+	if err != nil {
+		return errorResult(checkName, fmt.Sprintf("failed to create metrics client: %v", err))
+	}
+
+	fakeUC := createFakeUpgradeConfig("4.15.0")
+	passed, err := upgraders.ClusterOperators(metricsClient, r.CvClientBuilder.New(r.Client), fakeUC, logger, "")
+	if err != nil {
+		return completedResult(checkName, upgradev1alpha1.CheckFinding{
+			Verdict: upgradev1alpha1.CheckFailed,
+			Message: fmt.Sprintf("baseline: degraded operators detected: %v", err),
+			Details: []string{"This check uses the same validation the upgrade process uses"},
+		})
+	}
+	if !passed {
+		return completedResult(checkName, upgradev1alpha1.CheckFinding{
+			Verdict: upgradev1alpha1.CheckFailed,
+			Message: "baseline: degraded operators detected (upgraders.ClusterOperators)",
+			Details: []string{"This check uses the same validation the upgrade process uses"},
+		})
+	}
+
+	logger.Info("Baseline check passed", "check", checkName)
+	return completedResult(checkName, upgradev1alpha1.CheckFinding{
+		Verdict: upgradev1alpha1.CheckPassed,
+		Details: []string{"This check uses the same validation the upgrade process uses"},
+	})
+}
+
+// checkClusterOperatorsExtended checks for any degraded ClusterOperator.
+func (r *ReconcileUpgradePreflightCheck) checkClusterOperatorsExtended(
+	ctx context.Context,
+	logger logr.Logger,
+	timeout time.Duration,
+) upgradev1alpha1.PreflightCheckResult {
+	const checkName = "ClusterOperatorsExtended"
+	logger.Info("Running check", "check", checkName)
+
+	checkCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	_ = checkCtx
+
+	cvClient := r.CvClientBuilder.New(r.Client)
+	degraded, err := cvClient.HasDegradedOperators()
+	if err != nil {
+		logger.Error(err, "Check error", "check", checkName)
+		return errorResult(checkName, fmt.Sprintf("unable to fetch cluster operator status: %v", err))
+	}
+
+	if len(degraded.Degraded) > 0 {
+		logger.Info("Check failed", "check", checkName, "degradedOperators", degraded.Degraded)
+		return completedResult(checkName, upgradev1alpha1.CheckFinding{
+			Verdict: upgradev1alpha1.CheckFailed,
+			Message: fmt.Sprintf("degraded operators: %s", strings.Join(degraded.Degraded, ", ")),
+			Details: degraded.Degraded,
+		})
+	}
+
+	logger.Info("Check passed", "check", checkName)
+	return completedResult(checkName, upgradev1alpha1.CheckFinding{Verdict: upgradev1alpha1.CheckPassed})
+}
+
+// checkCriticalAlerts is a baseline wrapper that calls upgraders.CriticalAlertsDefault(),
+// the exact function the upgrade process uses for critical alert validation.
 func (r *ReconcileUpgradePreflightCheck) checkCriticalAlerts(
 	ctx context.Context,
 	logger logr.Logger,
 	timeout time.Duration,
 ) upgradev1alpha1.PreflightCheckResult {
 	const checkName = "CriticalAlerts"
+	logger.Info("Running baseline check", "check", checkName)
+
+	checkCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	_ = checkCtx
+
+	metricsClient, err := r.MetricsClientBuilder.NewClient(r.Client)
+	if err != nil {
+		return errorResult(checkName, fmt.Sprintf("failed to create metrics client: %v", err))
+	}
+
+	fakeUC := createFakeUpgradeConfig("4.15.0")
+	passed, err := upgraders.CriticalAlertsDefault(metricsClient, fakeUC, logger, "")
+	if err != nil {
+		return completedResult(checkName, upgradev1alpha1.CheckFinding{
+			Verdict: upgradev1alpha1.CheckFailed,
+			Message: fmt.Sprintf("baseline: critical alerts firing: %v", err),
+			Details: []string{"This check uses the same validation the upgrade process uses, including ignore lists"},
+		})
+	}
+	if !passed {
+		return completedResult(checkName, upgradev1alpha1.CheckFinding{
+			Verdict: upgradev1alpha1.CheckFailed,
+			Message: "baseline: critical alerts firing (upgraders.CriticalAlertsDefault)",
+			Details: []string{"This check uses the same validation the upgrade process uses, including ignore lists"},
+		})
+	}
+
+	logger.Info("Baseline check passed", "check", checkName)
+	return completedResult(checkName, upgradev1alpha1.CheckFinding{
+		Verdict: upgradev1alpha1.CheckPassed,
+		Details: []string{"This check uses the same validation the upgrade process uses, including ignore lists"},
+	})
+}
+
+// checkCriticalAlertsExtended queries Prometheus for firing critical alerts in core namespaces.
+func (r *ReconcileUpgradePreflightCheck) checkCriticalAlertsExtended(
+	ctx context.Context,
+	logger logr.Logger,
+	timeout time.Duration,
+) upgradev1alpha1.PreflightCheckResult {
+	const checkName = "CriticalAlertsExtended"
 	logger.Info("Running check", "check", checkName)
 
 	checkCtx, cancel := context.WithTimeout(ctx, timeout)
@@ -359,46 +533,56 @@ func (r *ReconcileUpgradePreflightCheck) checkCriticalAlerts(
 	})
 }
 
-// checkClusterOperators checks for any degraded ClusterOperator.
-func (r *ReconcileUpgradePreflightCheck) checkClusterOperators(
-	ctx context.Context,
-	logger logr.Logger,
-	timeout time.Duration,
-) upgradev1alpha1.PreflightCheckResult {
-	const checkName = "ClusterOperators"
-	logger.Info("Running check", "check", checkName)
-
-	checkCtx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-	_ = checkCtx
-
-	cvClient := r.CvClientBuilder.New(r.Client)
-	degraded, err := cvClient.HasDegradedOperators()
-	if err != nil {
-		logger.Error(err, "Check error", "check", checkName)
-		return errorResult(checkName, fmt.Sprintf("unable to fetch cluster operator status: %v", err))
-	}
-
-	if len(degraded.Degraded) > 0 {
-		logger.Info("Check failed", "check", checkName, "degradedOperators", degraded.Degraded)
-		return completedResult(checkName, upgradev1alpha1.CheckFinding{
-			Verdict: upgradev1alpha1.CheckFailed,
-			Message: fmt.Sprintf("degraded operators: %s", strings.Join(degraded.Degraded, ", ")),
-			Details: degraded.Degraded,
-		})
-	}
-
-	logger.Info("Check passed", "check", checkName)
-	return completedResult(checkName, upgradev1alpha1.CheckFinding{Verdict: upgradev1alpha1.CheckPassed})
-}
-
-// checkManuallyCordonedNodes checks for worker nodes cordoned by a human (not by the upgrader).
+// checkManuallyCordonedNodes is a baseline wrapper that calls upgraders.ManuallyCordonedNodes(),
+// the exact function the upgrade process uses for cordoned node validation.
 func (r *ReconcileUpgradePreflightCheck) checkManuallyCordonedNodes(
 	ctx context.Context,
 	logger logr.Logger,
 	timeout time.Duration,
 ) upgradev1alpha1.PreflightCheckResult {
 	const checkName = "ManuallyCordonedNodes"
+	logger.Info("Running baseline check", "check", checkName)
+
+	checkCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	_ = checkCtx
+
+	metricsClient, err := r.MetricsClientBuilder.NewClient(r.Client)
+	if err != nil {
+		return errorResult(checkName, fmt.Sprintf("failed to create metrics client: %v", err))
+	}
+
+	fakeUC := createFakeUpgradeConfig("4.15.0")
+	cordonedNodes, err := upgraders.ManuallyCordonedNodes(metricsClient, r.Machinery, r.Client, fakeUC, logger, "")
+	if err != nil && len(cordonedNodes) == 0 {
+		return errorResult(checkName, fmt.Sprintf("unable to check cordoned nodes: %v", err))
+	}
+	if len(cordonedNodes) > 0 {
+		details := []string{"This check uses the same validation the upgrade process uses, worker nodes only"}
+		for _, node := range cordonedNodes {
+			details = append(details, fmt.Sprintf("cordoned worker node: %s", node))
+		}
+		return completedResult(checkName, upgradev1alpha1.CheckFinding{
+			Verdict: upgradev1alpha1.CheckFailed,
+			Message: fmt.Sprintf("baseline: %d manually cordoned worker node(s)", len(cordonedNodes)),
+			Details: details,
+		})
+	}
+
+	logger.Info("Baseline check passed", "check", checkName)
+	return completedResult(checkName, upgradev1alpha1.CheckFinding{
+		Verdict: upgradev1alpha1.CheckPassed,
+		Details: []string{"This check uses the same validation the upgrade process uses, worker nodes only"},
+	})
+}
+
+// checkManuallyCordonedNodesExtended checks for worker nodes cordoned by a human (not by the upgrader).
+func (r *ReconcileUpgradePreflightCheck) checkManuallyCordonedNodesExtended(
+	ctx context.Context,
+	logger logr.Logger,
+	timeout time.Duration,
+) upgradev1alpha1.PreflightCheckResult {
+	const checkName = "ManuallyCordonedNodesExtended"
 	logger.Info("Running check", "check", checkName)
 
 	checkCtx, cancel := context.WithTimeout(ctx, timeout)
@@ -436,13 +620,56 @@ func (r *ReconcileUpgradePreflightCheck) checkManuallyCordonedNodes(
 	return completedResult(checkName, upgradev1alpha1.CheckFinding{Verdict: upgradev1alpha1.CheckPassed})
 }
 
-// checkNodeTaints checks for nodes with memory/disk/PID pressure taints.
+// checkNodeTaints is a baseline wrapper that calls upgraders.NodeUnschedulableTaints(),
+// the exact function the upgrade process uses for node taint validation.
 func (r *ReconcileUpgradePreflightCheck) checkNodeTaints(
 	ctx context.Context,
 	logger logr.Logger,
 	timeout time.Duration,
 ) upgradev1alpha1.PreflightCheckResult {
 	const checkName = "NodeUnschedulableTaints"
+	logger.Info("Running baseline check", "check", checkName)
+
+	checkCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	_ = checkCtx
+
+	metricsClient, err := r.MetricsClientBuilder.NewClient(r.Client)
+	if err != nil {
+		return errorResult(checkName, fmt.Sprintf("failed to create metrics client: %v", err))
+	}
+
+	fakeUC := createFakeUpgradeConfig("4.15.0")
+	taintedNodes, err := upgraders.NodeUnschedulableTaints(metricsClient, r.Machinery, r.Client, fakeUC, logger, "")
+	if err != nil && len(taintedNodes) == 0 {
+		return errorResult(checkName, fmt.Sprintf("unable to check node taints: %v", err))
+	}
+	if len(taintedNodes) > 0 {
+		details := []string{"This check uses the same validation the upgrade process uses, checks memory/disk/PID pressure taints"}
+		for _, node := range taintedNodes {
+			details = append(details, fmt.Sprintf("node with pressure taint: %s", node))
+		}
+		return completedResult(checkName, upgradev1alpha1.CheckFinding{
+			Verdict: upgradev1alpha1.CheckFailed,
+			Message: fmt.Sprintf("baseline: %d node(s) with pressure taints", len(taintedNodes)),
+			Details: details,
+		})
+	}
+
+	logger.Info("Baseline check passed", "check", checkName)
+	return completedResult(checkName, upgradev1alpha1.CheckFinding{
+		Verdict: upgradev1alpha1.CheckPassed,
+		Details: []string{"This check uses the same validation the upgrade process uses, checks memory/disk/PID pressure taints"},
+	})
+}
+
+// checkNodeTaintsExtended checks for nodes with memory/disk/PID pressure taints.
+func (r *ReconcileUpgradePreflightCheck) checkNodeTaintsExtended(
+	ctx context.Context,
+	logger logr.Logger,
+	timeout time.Duration,
+) upgradev1alpha1.PreflightCheckResult {
+	const checkName = "NodeUnschedulableTaintsExtended"
 	logger.Info("Running check", "check", checkName)
 
 	checkCtx, cancel := context.WithTimeout(ctx, timeout)
@@ -475,13 +702,15 @@ func (r *ReconcileUpgradePreflightCheck) checkNodeTaints(
 	return completedResult(checkName, upgradev1alpha1.CheckFinding{Verdict: upgradev1alpha1.CheckPassed})
 }
 
-// checkPodDisruptionBudgets checks for PDBs that would block node drains.
-func (r *ReconcileUpgradePreflightCheck) checkPodDisruptionBudgets(
+// checkPodDisruptionBudgetsExtended checks for PDBs that would block node drains.
+// PodDisruptionBudgets baseline wrapper is omitted: upgraders.HealthCheckPDB() requires a
+// DvoClientBuilder which is not available in the preflight reconciler struct.
+func (r *ReconcileUpgradePreflightCheck) checkPodDisruptionBudgetsExtended(
 	ctx context.Context,
 	logger logr.Logger,
 	timeout time.Duration,
 ) upgradev1alpha1.PreflightCheckResult {
-	const checkName = "PodDisruptionBudgets"
+	const checkName = "PodDisruptionBudgetsExtended"
 	logger.Info("Running check", "check", checkName)
 
 	checkCtx, cancel := context.WithTimeout(ctx, timeout)

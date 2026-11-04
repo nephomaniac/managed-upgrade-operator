@@ -184,11 +184,16 @@ var _ = Describe("PreflightController", func() {
 				// check calls (all checks enabled)
 				mockCvBuilder.EXPECT().New(gomock.Any()).Return(mockCv).AnyTimes()
 				mockCv.EXPECT().GetClusterVersion().Return(&configv1.ClusterVersion{}, nil).Times(2) // ClusterVersion + UpgradeableCondition
-				mockMetricsBuilder.EXPECT().NewClient(gomock.Any()).Return(mockMetrics, nil)
-				mockMetrics.EXPECT().Query(gomock.Any()).Return(&metrics.AlertResponse{}, nil)
-				mockCv.EXPECT().HasDegradedOperators().Return(&clusterversion.HasDegradedOperatorsResult{}, nil)
+				mockCv.EXPECT().HasDegradedOperators().Return(&clusterversion.HasDegradedOperatorsResult{}, nil).Times(2) // baseline CO + extended CO
+				// 5 NewClient calls: baseline CO, baseline CA, extended CA, baseline MCN, baseline NT
+				mockMetricsBuilder.EXPECT().NewClient(gomock.Any()).Return(mockMetrics, nil).Times(5)
+				mockMetrics.EXPECT().Query(gomock.Any()).Return(&metrics.AlertResponse{}, nil).Times(2) // extended CA + baseline CA
+				// metric update calls from upgraders functions (baseline CO, CA, MCN, NT on success)
+				mockMetrics.EXPECT().UpdateMetricHealthcheckSucceeded(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).AnyTimes()
+				mockMetrics.EXPECT().UpdateMetricHealthcheckFailed(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).AnyTimes()
+				// node list: 2 extended (MCN + NT) + 2 baseline (MCN + NT via upgraders)
 				mockClient.EXPECT().List(gomock.Any(), gomock.AssignableToTypeOf(&corev1.NodeList{}), gomock.Any()).
-					Return(nil).Times(2) // ManuallyCordonedNodes + NodeUnschedulableTaints
+					Return(nil).Times(4)
 				mockClient.EXPECT().List(gomock.Any(), gomock.AssignableToTypeOf(&policyv1.PodDisruptionBudgetList{}), gomock.Any()).
 					Return(nil)
 				// PullSecretValid: GetAccessToken reads ClusterVersion + pull-secret Secret
@@ -219,15 +224,15 @@ var _ = Describe("PreflightController", func() {
 
 	Describe("checkAllowed", func() {
 		It("allows all checks when the allowlist is empty", func() {
-			Expect(checkAllowed("CriticalAlerts", nil)).To(BeTrue())
-			Expect(checkAllowed("ClusterOperators", []string{})).To(BeTrue())
+			Expect(checkAllowed("CriticalAlertsExtended", nil)).To(BeTrue())
+			Expect(checkAllowed("ClusterOperatorsExtended", []string{})).To(BeTrue())
 		})
 
 		It("allows only listed checks when allowlist is non-empty", func() {
-			list := []string{"CriticalAlerts", "ClusterOperators"}
-			Expect(checkAllowed("CriticalAlerts", list)).To(BeTrue())
-			Expect(checkAllowed("ClusterOperators", list)).To(BeTrue())
-			Expect(checkAllowed("PodDisruptionBudgets", list)).To(BeFalse())
+			list := []string{"CriticalAlertsExtended", "ClusterOperatorsExtended"}
+			Expect(checkAllowed("CriticalAlertsExtended", list)).To(BeTrue())
+			Expect(checkAllowed("ClusterOperatorsExtended", list)).To(BeTrue())
+			Expect(checkAllowed("PodDisruptionBudgetsExtended", list)).To(BeFalse())
 		})
 	})
 
@@ -341,13 +346,45 @@ var _ = Describe("PreflightController", func() {
 			})
 		})
 
-		Context("checkCriticalAlerts", func() {
+		Context("checkCriticalAlerts (baseline)", func() {
 			It("returns Passed when no critical alerts are firing", func() {
 				mockMetricsBuilder.EXPECT().NewClient(gomock.Any()).Return(mockMetrics, nil)
 				mockMetrics.EXPECT().Query(gomock.Any()).Return(&metrics.AlertResponse{
 					Data: metrics.AlertData{Result: []metrics.AlertResult{}},
 				}, nil)
+				mockMetrics.EXPECT().UpdateMetricHealthcheckSucceeded(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).AnyTimes()
 				result := reconciler.checkCriticalAlerts(context.TODO(), log, defaultCheckTimeout)
+				Expect(result.Execution.State).To(Equal(upgradev1alpha1.CheckCompleted))
+				Expect(result.Result.Verdict).To(Equal(upgradev1alpha1.CheckPassed))
+			})
+
+			It("returns Failed when critical alerts are firing", func() {
+				mockMetricsBuilder.EXPECT().NewClient(gomock.Any()).Return(mockMetrics, nil)
+				mockMetrics.EXPECT().Query(gomock.Any()).Return(&metrics.AlertResponse{
+					Data: metrics.AlertData{Result: []metrics.AlertResult{
+						{Metric: map[string]string{"alertname": "KubeNodeNotReady"}},
+					}},
+				}, nil)
+				mockMetrics.EXPECT().UpdateMetricHealthcheckFailed(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).AnyTimes()
+				result := reconciler.checkCriticalAlerts(context.TODO(), log, defaultCheckTimeout)
+				Expect(result.Execution.State).To(Equal(upgradev1alpha1.CheckCompleted))
+				Expect(result.Result.Verdict).To(Equal(upgradev1alpha1.CheckFailed))
+			})
+
+			It("returns Error when the metrics client cannot be built", func() {
+				mockMetricsBuilder.EXPECT().NewClient(gomock.Any()).Return(nil, fmt.Errorf("prometheus unreachable"))
+				result := reconciler.checkCriticalAlerts(context.TODO(), log, defaultCheckTimeout)
+				Expect(result.Execution.State).To(Equal(upgradev1alpha1.CheckError))
+			})
+		})
+
+		Context("checkCriticalAlertsExtended", func() {
+			It("returns Passed when no critical alerts are firing", func() {
+				mockMetricsBuilder.EXPECT().NewClient(gomock.Any()).Return(mockMetrics, nil)
+				mockMetrics.EXPECT().Query(gomock.Any()).Return(&metrics.AlertResponse{
+					Data: metrics.AlertData{Result: []metrics.AlertResult{}},
+				}, nil)
+				result := reconciler.checkCriticalAlertsExtended(context.TODO(), log, defaultCheckTimeout)
 				Expect(result.Execution.State).To(Equal(upgradev1alpha1.CheckCompleted))
 				Expect(result.Result.Verdict).To(Equal(upgradev1alpha1.CheckPassed))
 			})
@@ -361,7 +398,7 @@ var _ = Describe("PreflightController", func() {
 						{Metric: map[string]string{"alertname": "ClusterOperatorDown"}},
 					}},
 				}, nil)
-				result := reconciler.checkCriticalAlerts(context.TODO(), log, defaultCheckTimeout)
+				result := reconciler.checkCriticalAlertsExtended(context.TODO(), log, defaultCheckTimeout)
 				Expect(result.Execution.State).To(Equal(upgradev1alpha1.CheckCompleted))
 				Expect(result.Result.Verdict).To(Equal(upgradev1alpha1.CheckFailed))
 				Expect(result.Result.Details).To(ConsistOf("KubeNodeNotReady", "ClusterOperatorDown"))
@@ -373,7 +410,7 @@ var _ = Describe("PreflightController", func() {
 				mockMetricsBuilder.EXPECT().NewClient(gomock.Any()).
 					Return(nil, fmt.Errorf("prometheus unreachable")).
 					Times(prometheusRetries)
-				result := reconciler.checkCriticalAlerts(context.TODO(), log, defaultCheckTimeout)
+				result := reconciler.checkCriticalAlertsExtended(context.TODO(), log, defaultCheckTimeout)
 				Expect(result.Execution.State).To(Equal(upgradev1alpha1.CheckError))
 				Expect(result.Execution.Error).To(ContainSubstring("prometheus unreachable"))
 			})
@@ -383,14 +420,16 @@ var _ = Describe("PreflightController", func() {
 				defer func() { prometheusRetryBase = 2 * time.Second }()
 				mockMetricsBuilder.EXPECT().NewClient(gomock.Any()).Return(mockMetrics, nil).Times(prometheusRetries)
 				mockMetrics.EXPECT().Query(gomock.Any()).Return(nil, fmt.Errorf("query error")).Times(prometheusRetries)
-				result := reconciler.checkCriticalAlerts(context.TODO(), log, defaultCheckTimeout)
+				result := reconciler.checkCriticalAlertsExtended(context.TODO(), log, defaultCheckTimeout)
 				Expect(result.Execution.State).To(Equal(upgradev1alpha1.CheckError))
 				Expect(result.Execution.Error).To(ContainSubstring("query error"))
 			})
 		})
 
-		Context("checkClusterOperators", func() {
+		Context("checkClusterOperators (baseline)", func() {
 			It("returns Passed when no operators are degraded", func() {
+				mockMetricsBuilder.EXPECT().NewClient(gomock.Any()).Return(mockMetrics, nil)
+				mockMetrics.EXPECT().UpdateMetricHealthcheckSucceeded(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).AnyTimes()
 				mockCvBuilder.EXPECT().New(gomock.Any()).Return(mockCv)
 				mockCv.EXPECT().HasDegradedOperators().Return(&clusterversion.HasDegradedOperatorsResult{
 					Degraded: []string{},
@@ -400,12 +439,42 @@ var _ = Describe("PreflightController", func() {
 				Expect(result.Result.Verdict).To(Equal(upgradev1alpha1.CheckPassed))
 			})
 
+			It("returns Failed when operators are degraded", func() {
+				mockMetricsBuilder.EXPECT().NewClient(gomock.Any()).Return(mockMetrics, nil)
+				mockMetrics.EXPECT().UpdateMetricHealthcheckFailed(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).AnyTimes()
+				mockCvBuilder.EXPECT().New(gomock.Any()).Return(mockCv)
+				mockCv.EXPECT().HasDegradedOperators().Return(&clusterversion.HasDegradedOperatorsResult{
+					Degraded: []string{"kube-apiserver"},
+				}, nil)
+				result := reconciler.checkClusterOperators(context.TODO(), log, defaultCheckTimeout)
+				Expect(result.Execution.State).To(Equal(upgradev1alpha1.CheckCompleted))
+				Expect(result.Result.Verdict).To(Equal(upgradev1alpha1.CheckFailed))
+			})
+
+			It("returns Error when metrics client cannot be built", func() {
+				mockMetricsBuilder.EXPECT().NewClient(gomock.Any()).Return(nil, fmt.Errorf("metrics unavailable"))
+				result := reconciler.checkClusterOperators(context.TODO(), log, defaultCheckTimeout)
+				Expect(result.Execution.State).To(Equal(upgradev1alpha1.CheckError))
+			})
+		})
+
+		Context("checkClusterOperatorsExtended", func() {
+			It("returns Passed when no operators are degraded", func() {
+				mockCvBuilder.EXPECT().New(gomock.Any()).Return(mockCv)
+				mockCv.EXPECT().HasDegradedOperators().Return(&clusterversion.HasDegradedOperatorsResult{
+					Degraded: []string{},
+				}, nil)
+				result := reconciler.checkClusterOperatorsExtended(context.TODO(), log, defaultCheckTimeout)
+				Expect(result.Execution.State).To(Equal(upgradev1alpha1.CheckCompleted))
+				Expect(result.Result.Verdict).To(Equal(upgradev1alpha1.CheckPassed))
+			})
+
 			It("returns Failed with degraded operator names", func() {
 				mockCvBuilder.EXPECT().New(gomock.Any()).Return(mockCv)
 				mockCv.EXPECT().HasDegradedOperators().Return(&clusterversion.HasDegradedOperatorsResult{
 					Degraded: []string{"kube-apiserver", "etcd"},
 				}, nil)
-				result := reconciler.checkClusterOperators(context.TODO(), log, defaultCheckTimeout)
+				result := reconciler.checkClusterOperatorsExtended(context.TODO(), log, defaultCheckTimeout)
 				Expect(result.Execution.State).To(Equal(upgradev1alpha1.CheckCompleted))
 				Expect(result.Result.Verdict).To(Equal(upgradev1alpha1.CheckFailed))
 				Expect(result.Result.Details).To(ConsistOf("kube-apiserver", "etcd"))
@@ -414,13 +483,31 @@ var _ = Describe("PreflightController", func() {
 			It("returns Error when HasDegradedOperators fails", func() {
 				mockCvBuilder.EXPECT().New(gomock.Any()).Return(mockCv)
 				mockCv.EXPECT().HasDegradedOperators().Return(nil, fmt.Errorf("co list failed"))
-				result := reconciler.checkClusterOperators(context.TODO(), log, defaultCheckTimeout)
+				result := reconciler.checkClusterOperatorsExtended(context.TODO(), log, defaultCheckTimeout)
 				Expect(result.Execution.State).To(Equal(upgradev1alpha1.CheckError))
 				Expect(result.Execution.Error).To(ContainSubstring("co list failed"))
 			})
 		})
 
-		Context("checkManuallyCordonedNodes", func() {
+		Context("checkManuallyCordonedNodes (baseline)", func() {
+			It("returns Passed when no worker nodes are cordoned", func() {
+				mockMetricsBuilder.EXPECT().NewClient(gomock.Any()).Return(mockMetrics, nil)
+				mockMetrics.EXPECT().UpdateMetricHealthcheckSucceeded(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).AnyTimes()
+				mockClient.EXPECT().List(gomock.Any(), gomock.AssignableToTypeOf(&corev1.NodeList{}), gomock.Any()).
+					Return(nil)
+				result := reconciler.checkManuallyCordonedNodes(context.TODO(), log, defaultCheckTimeout)
+				Expect(result.Execution.State).To(Equal(upgradev1alpha1.CheckCompleted))
+				Expect(result.Result.Verdict).To(Equal(upgradev1alpha1.CheckPassed))
+			})
+
+			It("returns Error when metrics client cannot be built", func() {
+				mockMetricsBuilder.EXPECT().NewClient(gomock.Any()).Return(nil, fmt.Errorf("metrics unavailable"))
+				result := reconciler.checkManuallyCordonedNodes(context.TODO(), log, defaultCheckTimeout)
+				Expect(result.Execution.State).To(Equal(upgradev1alpha1.CheckError))
+			})
+		})
+
+		Context("checkManuallyCordonedNodesExtended", func() {
 			workerNode := func(name string) corev1.Node {
 				return corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: name}}
 			}
@@ -436,7 +523,7 @@ var _ = Describe("PreflightController", func() {
 						return nil
 					})
 				mockMachinery.EXPECT().IsNodeCordoned(gomock.Any()).Return(&machinery.IsCordonedResult{IsCordoned: false})
-				result := reconciler.checkManuallyCordonedNodes(context.TODO(), log, defaultCheckTimeout)
+				result := reconciler.checkManuallyCordonedNodesExtended(context.TODO(), log, defaultCheckTimeout)
 				Expect(result.Execution.State).To(Equal(upgradev1alpha1.CheckCompleted))
 				Expect(result.Result.Verdict).To(Equal(upgradev1alpha1.CheckPassed))
 			})
@@ -455,7 +542,7 @@ var _ = Describe("PreflightController", func() {
 				mockMachinery.EXPECT().IsNodeCordoned(gomock.Any()).Return(&machinery.IsCordonedResult{IsCordoned: true}).Times(2)
 				mockMachinery.EXPECT().IsNodeUpgrading(gomock.Any()).Return(true)  // worker-1: upgrading, skip
 				mockMachinery.EXPECT().IsNodeUpgrading(gomock.Any()).Return(false) // worker-2: manual
-				result := reconciler.checkManuallyCordonedNodes(context.TODO(), log, defaultCheckTimeout)
+				result := reconciler.checkManuallyCordonedNodesExtended(context.TODO(), log, defaultCheckTimeout)
 				Expect(result.Execution.State).To(Equal(upgradev1alpha1.CheckCompleted))
 				Expect(result.Result.Verdict).To(Equal(upgradev1alpha1.CheckFailed))
 				Expect(result.Result.Details).To(ContainElement("worker-2"))
@@ -464,13 +551,31 @@ var _ = Describe("PreflightController", func() {
 			It("returns Error when node list fails", func() {
 				mockClient.EXPECT().List(gomock.Any(), gomock.AssignableToTypeOf(&corev1.NodeList{}), gomock.Any()).
 					Return(fmt.Errorf("list nodes failed"))
-				result := reconciler.checkManuallyCordonedNodes(context.TODO(), log, defaultCheckTimeout)
+				result := reconciler.checkManuallyCordonedNodesExtended(context.TODO(), log, defaultCheckTimeout)
 				Expect(result.Execution.State).To(Equal(upgradev1alpha1.CheckError))
 				Expect(result.Execution.Error).To(ContainSubstring("list nodes failed"))
 			})
 		})
 
-		Context("checkNodeTaints", func() {
+		Context("checkNodeTaints (baseline)", func() {
+			It("returns Passed when no nodes have pressure taints", func() {
+				mockMetricsBuilder.EXPECT().NewClient(gomock.Any()).Return(mockMetrics, nil)
+				mockMetrics.EXPECT().UpdateMetricHealthcheckSucceeded(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).AnyTimes()
+				mockClient.EXPECT().List(gomock.Any(), gomock.AssignableToTypeOf(&corev1.NodeList{}), gomock.Any()).
+					Return(nil)
+				result := reconciler.checkNodeTaints(context.TODO(), log, defaultCheckTimeout)
+				Expect(result.Execution.State).To(Equal(upgradev1alpha1.CheckCompleted))
+				Expect(result.Result.Verdict).To(Equal(upgradev1alpha1.CheckPassed))
+			})
+
+			It("returns Error when metrics client cannot be built", func() {
+				mockMetricsBuilder.EXPECT().NewClient(gomock.Any()).Return(nil, fmt.Errorf("metrics unavailable"))
+				result := reconciler.checkNodeTaints(context.TODO(), log, defaultCheckTimeout)
+				Expect(result.Execution.State).To(Equal(upgradev1alpha1.CheckError))
+			})
+		})
+
+		Context("checkNodeTaintsExtended", func() {
 			It("returns Passed when no nodes have pressure taints", func() {
 				mockClient.EXPECT().List(gomock.Any(), gomock.AssignableToTypeOf(&corev1.NodeList{}), gomock.Any()).
 					DoAndReturn(func(_ context.Context, list interface{}, _ ...interface{}) error {
@@ -484,7 +589,7 @@ var _ = Describe("PreflightController", func() {
 				mockMachinery.EXPECT().HasMemoryPressure(gomock.Any()).Return(false)
 				mockMachinery.EXPECT().HasDiskPressure(gomock.Any()).Return(false)
 				mockMachinery.EXPECT().HasPidPressure(gomock.Any()).Return(false)
-				result := reconciler.checkNodeTaints(context.TODO(), log, defaultCheckTimeout)
+				result := reconciler.checkNodeTaintsExtended(context.TODO(), log, defaultCheckTimeout)
 				Expect(result.Execution.State).To(Equal(upgradev1alpha1.CheckCompleted))
 				Expect(result.Result.Verdict).To(Equal(upgradev1alpha1.CheckPassed))
 			})
@@ -500,7 +605,7 @@ var _ = Describe("PreflightController", func() {
 						return nil
 					})
 				mockMachinery.EXPECT().HasMemoryPressure(gomock.Any()).Return(true)
-				result := reconciler.checkNodeTaints(context.TODO(), log, defaultCheckTimeout)
+				result := reconciler.checkNodeTaintsExtended(context.TODO(), log, defaultCheckTimeout)
 				Expect(result.Execution.State).To(Equal(upgradev1alpha1.CheckCompleted))
 				Expect(result.Result.Verdict).To(Equal(upgradev1alpha1.CheckFailed))
 				Expect(result.Result.Details).To(ContainElement("worker-1"))
@@ -509,16 +614,16 @@ var _ = Describe("PreflightController", func() {
 			It("returns Error when node list fails", func() {
 				mockClient.EXPECT().List(gomock.Any(), gomock.AssignableToTypeOf(&corev1.NodeList{}), gomock.Any()).
 					Return(fmt.Errorf("list nodes failed"))
-				result := reconciler.checkNodeTaints(context.TODO(), log, defaultCheckTimeout)
+				result := reconciler.checkNodeTaintsExtended(context.TODO(), log, defaultCheckTimeout)
 				Expect(result.Execution.State).To(Equal(upgradev1alpha1.CheckError))
 			})
 		})
 
-		Context("checkPodDisruptionBudgets", func() {
+		Context("checkPodDisruptionBudgetsExtended", func() {
 			It("returns Passed when no blocking PDBs exist", func() {
 				mockClient.EXPECT().List(gomock.Any(), gomock.AssignableToTypeOf(&policyv1.PodDisruptionBudgetList{}), gomock.Any()).
 					Return(nil)
-				result := reconciler.checkPodDisruptionBudgets(context.TODO(), log, defaultCheckTimeout)
+				result := reconciler.checkPodDisruptionBudgetsExtended(context.TODO(), log, defaultCheckTimeout)
 				Expect(result.Execution.State).To(Equal(upgradev1alpha1.CheckCompleted))
 				Expect(result.Result.Verdict).To(Equal(upgradev1alpha1.CheckPassed))
 			})
@@ -539,7 +644,7 @@ var _ = Describe("PreflightController", func() {
 						}
 						return nil
 					})
-				result := reconciler.checkPodDisruptionBudgets(context.TODO(), log, defaultCheckTimeout)
+				result := reconciler.checkPodDisruptionBudgetsExtended(context.TODO(), log, defaultCheckTimeout)
 				Expect(result.Execution.State).To(Equal(upgradev1alpha1.CheckCompleted))
 				Expect(result.Result.Verdict).To(Equal(upgradev1alpha1.CheckFailed))
 				Expect(result.Result.Details).To(ContainElement(ContainSubstring("strict-pdb")))
@@ -548,7 +653,7 @@ var _ = Describe("PreflightController", func() {
 			It("returns Error when PDB list fails", func() {
 				mockClient.EXPECT().List(gomock.Any(), gomock.AssignableToTypeOf(&policyv1.PodDisruptionBudgetList{}), gomock.Any()).
 					Return(fmt.Errorf("list pdb failed"))
-				result := reconciler.checkPodDisruptionBudgets(context.TODO(), log, defaultCheckTimeout)
+				result := reconciler.checkPodDisruptionBudgetsExtended(context.TODO(), log, defaultCheckTimeout)
 				Expect(result.Execution.State).To(Equal(upgradev1alpha1.CheckError))
 			})
 		})
