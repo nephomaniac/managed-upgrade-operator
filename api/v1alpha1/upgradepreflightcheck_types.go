@@ -40,52 +40,48 @@ const (
 	CheckSkipped CheckExecutionState = "Skipped"
 )
 
-// CheckExecution describes whether the check machinery ran successfully.
+// CheckResult is the health verdict from running a preflight check.
+// +kubebuilder:validation:Enum={"Passed","Failed","Unknown"}
+type CheckResult string
+
+const (
+	// CheckPassed means the cluster is healthy for this check dimension.
+	CheckPassed CheckResult = "Passed"
+	// CheckFailed means the cluster has issues that should block upgrade.
+	CheckFailed CheckResult = "Failed"
+	// CheckUnknown means we could not determine cluster health (check errored or was skipped).
+	CheckUnknown CheckResult = "Unknown"
+)
+
+// CheckExecution describes the outcome of running a preflight check.
 type CheckExecution struct {
 	// State is the execution outcome: Completed, Error, or Skipped.
 	State CheckExecutionState `json:"state"`
-	// Description explains what this check validates, why it matters for upgrades,
-	// and what cluster resources it examines. Educational context for cluster administrators.
+	// Result is the health verdict: Passed, Failed, or Unknown.
+	Result CheckResult `json:"result"`
+	// Message is a human-readable summary (typically present when Result=Failed).
 	// +kubebuilder:validation:Optional
-	Description string `json:"description,omitempty"`
+	Message string `json:"message,omitempty"`
+	// Details contains per-item findings (e.g. individual alert names, node names).
+	// Structured for tooling; parse with jq/yq via .execution.details[].
+	// +kubebuilder:validation:Optional
+	Details []string `json:"details,omitempty"`
 	// Error contains the reason a check could not run (State=Error only).
 	// This is an infrastructure/transient failure, not a cluster health finding.
 	// +kubebuilder:validation:Optional
 	Error string `json:"error,omitempty"`
 }
 
-// CheckVerdict is the health verdict when a check completes successfully.
-// +kubebuilder:validation:Enum={"Passed","Failed"}
-type CheckVerdict string
-
-const (
-	CheckPassed CheckVerdict = "Passed"
-	CheckFailed CheckVerdict = "Failed"
-)
-
-// CheckFinding describes what a completed check found about cluster health.
-// Only present when CheckExecution.State=Completed.
-type CheckFinding struct {
-	// Verdict is Passed if the cluster is healthy for this check, Failed otherwise.
-	Verdict CheckVerdict `json:"verdict"`
-	// Message is a human-readable summary of the finding (present on Failed).
-	// +kubebuilder:validation:Optional
-	Message string `json:"message,omitempty"`
-	// Details contains per-item findings (e.g. individual alert names, node names).
-	// Structured for tooling; parse with jq/yq via .result.details[].
-	// +kubebuilder:validation:Optional
-	Details []string `json:"details,omitempty"`
-}
-
-// PreflightCheckResult holds the execution state and finding for a single preflight check.
+// PreflightCheckResult holds the execution outcome and finding for a single preflight check.
 type PreflightCheckResult struct {
 	// Name identifies the check (e.g. "CriticalAlerts", "ClusterOperators").
 	Name string `json:"name"`
-	// Execution describes whether the check ran successfully.
-	Execution CheckExecution `json:"execution"`
-	// Result contains the health finding. Only present when Execution.State=Completed.
+	// Description explains what this check validates, why it matters for upgrades,
+	// and what cluster resources it examines. Educational context for cluster administrators.
 	// +kubebuilder:validation:Optional
-	Result *CheckFinding `json:"result,omitempty"`
+	Description string `json:"description,omitempty"`
+	// Execution contains the state, result, and details from running the check.
+	Execution CheckExecution `json:"execution"`
 }
 
 // UpgradePreflightCheckStatus reports the outcome of all checks.

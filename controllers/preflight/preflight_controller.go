@@ -256,25 +256,29 @@ func safeRun(name string, fn func() upgradev1alpha1.PreflightCheckResult) (resul
 }
 
 // completedResult returns a PreflightCheckResult with State=Completed and the given finding.
-func completedResult(name, description string, finding upgradev1alpha1.CheckFinding) upgradev1alpha1.PreflightCheckResult {
+// completedResult returns a PreflightCheckResult with State=Completed and the given health finding.
+func completedResult(name, description string, result upgradev1alpha1.CheckResult, message string, details []string) upgradev1alpha1.PreflightCheckResult {
 	return upgradev1alpha1.PreflightCheckResult{
-		Name: name,
+		Name:        name,
+		Description: description,
 		Execution: upgradev1alpha1.CheckExecution{
-			State:       upgradev1alpha1.CheckCompleted,
-			Description: description,
+			State:   upgradev1alpha1.CheckCompleted,
+			Result:  result,
+			Message: message,
+			Details: details,
 		},
-		Result: &finding,
 	}
 }
 
-// errorResult returns a PreflightCheckResult with State=Error and the given infrastructure error.
+// errorResult returns a PreflightCheckResult with State=Error, Result=Unknown, and the given infrastructure error.
 func errorResult(name, description, errMsg string) upgradev1alpha1.PreflightCheckResult {
 	return upgradev1alpha1.PreflightCheckResult{
-		Name: name,
+		Name:        name,
+		Description: description,
 		Execution: upgradev1alpha1.CheckExecution{
-			State:       upgradev1alpha1.CheckError,
-			Description: description,
-			Error:       errMsg,
+			State:  upgradev1alpha1.CheckError,
+			Result: upgradev1alpha1.CheckUnknown,
+			Error:  errMsg,
 		},
 	}
 }
@@ -306,10 +310,8 @@ func (r *ReconcileUpgradePreflightCheck) checkClusterVersion(
 		version = clusterVersion.Status.Desired.Version
 	}
 	logger.Info("Check passed", "check", checkName, "currentVersion", version)
-	return completedResult(checkName, descClusterVersion, upgradev1alpha1.CheckFinding{
-		Verdict: upgradev1alpha1.CheckPassed,
-		Details: []string{fmt.Sprintf("currentVersion=%s", version)},
-	})
+	return completedResult(checkName, descClusterVersion, upgradev1alpha1.CheckPassed, "",
+		[]string{fmt.Sprintf("currentVersion=%s", version)})
 }
 
 // checkCriticalAlerts queries Prometheus for firing critical alerts in core namespaces.
@@ -365,7 +367,7 @@ func (r *ReconcileUpgradePreflightCheck) checkCriticalAlerts(
 
 	if len(alerts.Data.Result) == 0 {
 		logger.Info("Check passed", "check", checkName)
-		return completedResult(checkName, descCriticalAlerts, upgradev1alpha1.CheckFinding{Verdict: upgradev1alpha1.CheckPassed})
+		return completedResult(checkName, descCriticalAlerts, upgradev1alpha1.CheckPassed, "", nil)
 	}
 
 	seen := make(map[string]bool)
@@ -378,11 +380,8 @@ func (r *ReconcileUpgradePreflightCheck) checkCriticalAlerts(
 		}
 	}
 	logger.Info("Check failed", "check", checkName, "firingAlerts", names)
-	return completedResult(checkName, descCriticalAlerts, upgradev1alpha1.CheckFinding{
-		Verdict: upgradev1alpha1.CheckFailed,
-		Message: fmt.Sprintf("critical alert(s) firing: %s", strings.Join(names, ", ")),
-		Details: names,
-	})
+	return completedResult(checkName, descCriticalAlerts, upgradev1alpha1.CheckFailed,
+		fmt.Sprintf("critical alert(s) firing: %s", strings.Join(names, ", ")), names)
 }
 
 // checkClusterOperators checks for any degraded ClusterOperator.
@@ -407,15 +406,12 @@ func (r *ReconcileUpgradePreflightCheck) checkClusterOperators(
 
 	if len(degraded.Degraded) > 0 {
 		logger.Info("Check failed", "check", checkName, "degradedOperators", degraded.Degraded)
-		return completedResult(checkName, descClusterOperators, upgradev1alpha1.CheckFinding{
-			Verdict: upgradev1alpha1.CheckFailed,
-			Message: fmt.Sprintf("degraded operators: %s", strings.Join(degraded.Degraded, ", ")),
-			Details: degraded.Degraded,
-		})
+		return completedResult(checkName, descClusterOperators, upgradev1alpha1.CheckFailed,
+			fmt.Sprintf("degraded operators: %s", strings.Join(degraded.Degraded, ", ")), degraded.Degraded)
 	}
 
 	logger.Info("Check passed", "check", checkName)
-	return completedResult(checkName, descClusterOperators, upgradev1alpha1.CheckFinding{Verdict: upgradev1alpha1.CheckPassed})
+	return completedResult(checkName, descClusterOperators, upgradev1alpha1.CheckPassed, "", nil)
 }
 
 // checkManuallyCordonedNodes checks for worker nodes cordoned by a human (not by the upgrader).
@@ -451,15 +447,12 @@ func (r *ReconcileUpgradePreflightCheck) checkManuallyCordonedNodes(
 
 	if len(cordoned) > 0 {
 		logger.Info("Check failed", "check", checkName, "cordonedNodes", cordoned)
-		return completedResult(checkName, descManuallyCordonedNodes, upgradev1alpha1.CheckFinding{
-			Verdict: upgradev1alpha1.CheckFailed,
-			Message: fmt.Sprintf("manually cordoned nodes: %s", strings.Join(cordoned, ", ")),
-			Details: cordoned,
-		})
+		return completedResult(checkName, descManuallyCordonedNodes, upgradev1alpha1.CheckFailed,
+			fmt.Sprintf("manually cordoned nodes: %s", strings.Join(cordoned, ", ")), cordoned)
 	}
 
 	logger.Info("Check passed", "check", checkName)
-	return completedResult(checkName, descManuallyCordonedNodes, upgradev1alpha1.CheckFinding{Verdict: upgradev1alpha1.CheckPassed})
+	return completedResult(checkName, descManuallyCordonedNodes, upgradev1alpha1.CheckPassed, "", nil)
 }
 
 // checkNodeTaints checks for nodes with memory/disk/PID pressure taints.
@@ -490,15 +483,12 @@ func (r *ReconcileUpgradePreflightCheck) checkNodeTaints(
 
 	if len(affected) > 0 {
 		logger.Info("Check failed", "check", checkName, "affectedNodes", affected)
-		return completedResult(checkName, descNodeTaints, upgradev1alpha1.CheckFinding{
-			Verdict: upgradev1alpha1.CheckFailed,
-			Message: fmt.Sprintf("nodes with unschedulable taints: %s", strings.Join(affected, ", ")),
-			Details: affected,
-		})
+		return completedResult(checkName, descNodeTaints, upgradev1alpha1.CheckFailed,
+			fmt.Sprintf("nodes with unschedulable taints: %s", strings.Join(affected, ", ")), affected)
 	}
 
 	logger.Info("Check passed", "check", checkName)
-	return completedResult(checkName, descNodeTaints, upgradev1alpha1.CheckFinding{Verdict: upgradev1alpha1.CheckPassed})
+	return completedResult(checkName, descNodeTaints, upgradev1alpha1.CheckPassed, "", nil)
 }
 
 // checkPodDisruptionBudgets checks for PDBs that would block node drains.
@@ -528,15 +518,12 @@ func (r *ReconcileUpgradePreflightCheck) checkPodDisruptionBudgets(
 
 	if len(bad) > 0 {
 		logger.Info("Check failed", "check", checkName, "blockingPDBs", bad)
-		return completedResult(checkName, descPodDisruptionBudgets, upgradev1alpha1.CheckFinding{
-			Verdict: upgradev1alpha1.CheckFailed,
-			Message: fmt.Sprintf("blocking PodDisruptionBudgets: %s", strings.Join(bad, "; ")),
-			Details: bad,
-		})
+		return completedResult(checkName, descPodDisruptionBudgets, upgradev1alpha1.CheckFailed,
+			fmt.Sprintf("blocking PodDisruptionBudgets: %s", strings.Join(bad, "; ")), bad)
 	}
 
 	logger.Info("Check passed", "check", checkName)
-	return completedResult(checkName, descPodDisruptionBudgets, upgradev1alpha1.CheckFinding{Verdict: upgradev1alpha1.CheckPassed})
+	return completedResult(checkName, descPodDisruptionBudgets, upgradev1alpha1.CheckPassed, "", nil)
 }
 
 // pdbViolation returns a non-empty reason if the PDB would block a drain.
@@ -589,22 +576,18 @@ func (r *ReconcileUpgradePreflightCheck) checkUpgradeableCondition(
 	for _, condition := range clusterVersion.Status.Conditions {
 		if condition.Type == configv1.OperatorUpgradeable && condition.Status == configv1.ConditionFalse {
 			logger.Info("Check failed", "check", checkName, "reason", condition.Reason, "message", condition.Message)
-			return completedResult(checkName, descUpgradeableCondition, upgradev1alpha1.CheckFinding{
-				Verdict: upgradev1alpha1.CheckFailed,
-				Message: fmt.Sprintf("Upgradeable=False: %s", condition.Reason),
-				Details: []string{
+			return completedResult(checkName, descUpgradeableCondition, upgradev1alpha1.CheckFailed,
+				fmt.Sprintf("Upgradeable=False: %s", condition.Reason),
+				[]string{
 					fmt.Sprintf("reason=%s", condition.Reason),
 					fmt.Sprintf("message=%s", condition.Message),
-				},
-			})
+				})
 		}
 	}
 
 	logger.Info("Check passed", "check", checkName)
-	return completedResult(checkName, descUpgradeableCondition, upgradev1alpha1.CheckFinding{
-		Verdict: upgradev1alpha1.CheckPassed,
-		Message: "Cluster Upgradeable condition is True - no upgrade blockers detected",
-	})
+	return completedResult(checkName, descUpgradeableCondition, upgradev1alpha1.CheckPassed,
+		"Cluster Upgradeable condition is True - no upgrade blockers detected", nil)
 }
 
 // checkPullSecretValid validates the cluster pull secret exists and has required auth entries.
@@ -619,18 +602,13 @@ func (r *ReconcileUpgradePreflightCheck) checkPullSecretValid(
 	_, err := util.GetAccessToken(r.Client)
 	if err != nil {
 		logger.Info("Check failed", "check", checkName, "error", err.Error())
-		return completedResult(checkName, descPullSecretValid, upgradev1alpha1.CheckFinding{
-			Verdict: upgradev1alpha1.CheckFailed,
-			Message: fmt.Sprintf("pull secret validation failed: %v", err),
-			Details: []string{err.Error()},
-		})
+		return completedResult(checkName, descPullSecretValid, upgradev1alpha1.CheckFailed,
+			fmt.Sprintf("pull secret validation failed: %v", err), []string{err.Error()})
 	}
 
 	logger.Info("Check passed", "check", checkName)
-	return completedResult(checkName, descPullSecretValid, upgradev1alpha1.CheckFinding{
-		Verdict: upgradev1alpha1.CheckPassed,
-		Message: "Pull secret contains required cloud.openshift.com authentication",
-	})
+	return completedResult(checkName, descPullSecretValid, upgradev1alpha1.CheckPassed,
+		"Pull secret contains required cloud.openshift.com authentication", nil)
 }
 
 // checkAdminAcks checks the admin-acks ConfigMap in openshift-config for required
@@ -680,11 +658,7 @@ func (r *ReconcileUpgradePreflightCheck) checkAdminAcks(
 				msg += " — if this upgrade removes APIs, acknowledgements may be required. Check release notes."
 			}
 			logger.Info("Check passed", "check", checkName, "note", msg)
-			return completedResult(checkName, descAdminAcks, upgradev1alpha1.CheckFinding{
-				Verdict: upgradev1alpha1.CheckPassed,
-				Message: msg,
-				Details: []string{"ConfigMap openshift-config/admin-acks does not exist"},
-			})
+			return completedResult(checkName, descAdminAcks, upgradev1alpha1.CheckPassed, msg, []string{"ConfigMap openshift-config/admin-acks does not exist"})
 		}
 		logger.Error(err, "Check error", "check", checkName)
 		return errorResult(checkName, descAdminAcks, fmt.Sprintf("unable to read admin-acks ConfigMap: %v", err))
@@ -702,19 +676,12 @@ func (r *ReconcileUpgradePreflightCheck) checkAdminAcks(
 			msg += " — if this upgrade removes APIs, acknowledgements may be required. Check release notes."
 		}
 		logger.Info("Check passed", "check", checkName, "note", "ConfigMap is empty")
-		return completedResult(checkName, descAdminAcks, upgradev1alpha1.CheckFinding{
-			Verdict: upgradev1alpha1.CheckPassed,
-			Message: msg,
-			Details: []string{"ConfigMap openshift-config/admin-acks has no data entries"},
-		})
+		return completedResult(checkName, descAdminAcks, upgradev1alpha1.CheckPassed, msg, []string{"ConfigMap openshift-config/admin-acks has no data entries"})
 	}
 
 	logger.Info("Check passed", "check", checkName, "ackCount", len(ackKeys))
-	return completedResult(checkName, descAdminAcks, upgradev1alpha1.CheckFinding{
-		Verdict: upgradev1alpha1.CheckPassed,
-		Message: fmt.Sprintf("Found %d admin acknowledgement(s)", len(ackKeys)),
-		Details: ackKeys,
-	})
+	return completedResult(checkName, descAdminAcks, upgradev1alpha1.CheckPassed,
+		fmt.Sprintf("Found %d admin acknowledgement(s)", len(ackKeys)), ackKeys)
 }
 
 // isYStreamUpgrade returns true if the upgrade is a y-stream (minor version) upgrade.

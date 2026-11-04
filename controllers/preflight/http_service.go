@@ -478,32 +478,42 @@ func buildResponse(requestID string, cr *upgradev1alpha1.UpgradePreflightCheck) 
 		r := CheckResult{
 			Name: c.Name,
 			Execution: CheckResultExecution{
-				Description: c.Execution.Description,
+				Description: c.Description,
 			},
 		}
-		switch c.Execution.State {
-		case upgradev1alpha1.CheckCompleted:
-			resp.ChecksCompleted++
-			if c.Result != nil {
-				r.Status = strings.ToLower(string(c.Result.Verdict))
-				r.Message = c.Result.Message
-				r.Details = c.Result.Details
-				if c.Result.Verdict == upgradev1alpha1.CheckFailed {
-					resp.ChecksFailed++
-					anyBad = true
-				} else {
-					resp.ChecksPassed++
-				}
-			}
-		case upgradev1alpha1.CheckError:
-			resp.ChecksErrored++
+
+		// Map execution.result to status
+		switch c.Execution.Result {
+		case upgradev1alpha1.CheckPassed:
+			r.Status = "passed"
+			resp.ChecksPassed++
+		case upgradev1alpha1.CheckFailed:
+			r.Status = "failed"
+			resp.ChecksFailed++
 			anyBad = true
-			r.Status = "error"
-			r.Message = c.Execution.Error
-		case upgradev1alpha1.CheckSkipped:
-			resp.ChecksSkipped++
-			r.Status = "skipped"
+		case upgradev1alpha1.CheckUnknown:
+			if c.Execution.State == upgradev1alpha1.CheckError {
+				r.Status = "error"
+				resp.ChecksErrored++
+				anyBad = true
+			} else {
+				r.Status = "skipped"
+				resp.ChecksSkipped++
+			}
 		}
+
+		// Set message and details
+		r.Message = c.Execution.Message
+		r.Details = c.Execution.Details
+		if c.Execution.State == upgradev1alpha1.CheckError {
+			r.Message = c.Execution.Error
+		}
+
+		// Track completed checks
+		if c.Execution.State == upgradev1alpha1.CheckCompleted {
+			resp.ChecksCompleted++
+		}
+
 		resp.Results = append(resp.Results, r)
 	}
 

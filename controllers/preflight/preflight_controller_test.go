@@ -328,8 +328,8 @@ var _ = Describe("PreflightController", func() {
 				}, nil)
 				result := reconciler.checkClusterVersion(context.TODO(), log, defaultCheckTimeout)
 				Expect(result.Execution.State).To(Equal(upgradev1alpha1.CheckCompleted))
-				Expect(result.Result.Verdict).To(Equal(upgradev1alpha1.CheckPassed))
-				Expect(result.Result.Details).To(ContainElement("currentVersion=4.16.10"))
+				Expect(result.Execution.Result).To(Equal(upgradev1alpha1.CheckPassed))
+				Expect(result.Execution.Details).To(ContainElement("currentVersion=4.16.10"))
 			})
 
 			It("returns Error when GetClusterVersion fails", func() {
@@ -349,7 +349,7 @@ var _ = Describe("PreflightController", func() {
 				}, nil)
 				result := reconciler.checkCriticalAlerts(context.TODO(), log, defaultCheckTimeout)
 				Expect(result.Execution.State).To(Equal(upgradev1alpha1.CheckCompleted))
-				Expect(result.Result.Verdict).To(Equal(upgradev1alpha1.CheckPassed))
+				Expect(result.Execution.Result).To(Equal(upgradev1alpha1.CheckPassed))
 			})
 
 			It("returns Failed with alert names when critical alerts are firing", func() {
@@ -363,8 +363,8 @@ var _ = Describe("PreflightController", func() {
 				}, nil)
 				result := reconciler.checkCriticalAlerts(context.TODO(), log, defaultCheckTimeout)
 				Expect(result.Execution.State).To(Equal(upgradev1alpha1.CheckCompleted))
-				Expect(result.Result.Verdict).To(Equal(upgradev1alpha1.CheckFailed))
-				Expect(result.Result.Details).To(ConsistOf("KubeNodeNotReady", "ClusterOperatorDown"))
+				Expect(result.Execution.Result).To(Equal(upgradev1alpha1.CheckFailed))
+				Expect(result.Execution.Details).To(ConsistOf("KubeNodeNotReady", "ClusterOperatorDown"))
 			})
 
 			It("returns Error when the metrics client cannot be built after retries", func() {
@@ -397,7 +397,7 @@ var _ = Describe("PreflightController", func() {
 				}, nil)
 				result := reconciler.checkClusterOperators(context.TODO(), log, defaultCheckTimeout)
 				Expect(result.Execution.State).To(Equal(upgradev1alpha1.CheckCompleted))
-				Expect(result.Result.Verdict).To(Equal(upgradev1alpha1.CheckPassed))
+				Expect(result.Execution.Result).To(Equal(upgradev1alpha1.CheckPassed))
 			})
 
 			It("returns Failed with degraded operator names", func() {
@@ -407,8 +407,8 @@ var _ = Describe("PreflightController", func() {
 				}, nil)
 				result := reconciler.checkClusterOperators(context.TODO(), log, defaultCheckTimeout)
 				Expect(result.Execution.State).To(Equal(upgradev1alpha1.CheckCompleted))
-				Expect(result.Result.Verdict).To(Equal(upgradev1alpha1.CheckFailed))
-				Expect(result.Result.Details).To(ConsistOf("kube-apiserver", "etcd"))
+				Expect(result.Execution.Result).To(Equal(upgradev1alpha1.CheckFailed))
+				Expect(result.Execution.Details).To(ConsistOf("kube-apiserver", "etcd"))
 			})
 
 			It("returns Error when HasDegradedOperators fails", func() {
@@ -438,7 +438,7 @@ var _ = Describe("PreflightController", func() {
 				mockMachinery.EXPECT().IsNodeCordoned(gomock.Any()).Return(&machinery.IsCordonedResult{IsCordoned: false})
 				result := reconciler.checkManuallyCordonedNodes(context.TODO(), log, defaultCheckTimeout)
 				Expect(result.Execution.State).To(Equal(upgradev1alpha1.CheckCompleted))
-				Expect(result.Result.Verdict).To(Equal(upgradev1alpha1.CheckPassed))
+				Expect(result.Execution.Result).To(Equal(upgradev1alpha1.CheckPassed))
 			})
 
 			It("returns Failed when a worker node is manually cordoned", func() {
@@ -457,8 +457,8 @@ var _ = Describe("PreflightController", func() {
 				mockMachinery.EXPECT().IsNodeUpgrading(gomock.Any()).Return(false) // worker-2: manual
 				result := reconciler.checkManuallyCordonedNodes(context.TODO(), log, defaultCheckTimeout)
 				Expect(result.Execution.State).To(Equal(upgradev1alpha1.CheckCompleted))
-				Expect(result.Result.Verdict).To(Equal(upgradev1alpha1.CheckFailed))
-				Expect(result.Result.Details).To(ContainElement("worker-2"))
+				Expect(result.Execution.Result).To(Equal(upgradev1alpha1.CheckFailed))
+				Expect(result.Execution.Details).To(ContainElement("worker-2"))
 			})
 
 			It("returns Error when node list fails", func() {
@@ -486,7 +486,7 @@ var _ = Describe("PreflightController", func() {
 				mockMachinery.EXPECT().HasPidPressure(gomock.Any()).Return(false)
 				result := reconciler.checkNodeTaints(context.TODO(), log, defaultCheckTimeout)
 				Expect(result.Execution.State).To(Equal(upgradev1alpha1.CheckCompleted))
-				Expect(result.Result.Verdict).To(Equal(upgradev1alpha1.CheckPassed))
+				Expect(result.Execution.Result).To(Equal(upgradev1alpha1.CheckPassed))
 			})
 
 			It("returns Failed when a node has memory pressure", func() {
@@ -502,8 +502,8 @@ var _ = Describe("PreflightController", func() {
 				mockMachinery.EXPECT().HasMemoryPressure(gomock.Any()).Return(true)
 				result := reconciler.checkNodeTaints(context.TODO(), log, defaultCheckTimeout)
 				Expect(result.Execution.State).To(Equal(upgradev1alpha1.CheckCompleted))
-				Expect(result.Result.Verdict).To(Equal(upgradev1alpha1.CheckFailed))
-				Expect(result.Result.Details).To(ContainElement("worker-1"))
+				Expect(result.Execution.Result).To(Equal(upgradev1alpha1.CheckFailed))
+				Expect(result.Execution.Details).To(ContainElement("worker-1"))
 			})
 
 			It("returns Error when node list fails", func() {
@@ -520,7 +520,7 @@ var _ = Describe("PreflightController", func() {
 					Return(nil)
 				result := reconciler.checkPodDisruptionBudgets(context.TODO(), log, defaultCheckTimeout)
 				Expect(result.Execution.State).To(Equal(upgradev1alpha1.CheckCompleted))
-				Expect(result.Result.Verdict).To(Equal(upgradev1alpha1.CheckPassed))
+				Expect(result.Execution.Result).To(Equal(upgradev1alpha1.CheckPassed))
 			})
 
 			It("returns Failed for PDBs with MaxUnavailable=0", func() {
@@ -541,8 +541,8 @@ var _ = Describe("PreflightController", func() {
 					})
 				result := reconciler.checkPodDisruptionBudgets(context.TODO(), log, defaultCheckTimeout)
 				Expect(result.Execution.State).To(Equal(upgradev1alpha1.CheckCompleted))
-				Expect(result.Result.Verdict).To(Equal(upgradev1alpha1.CheckFailed))
-				Expect(result.Result.Details).To(ContainElement(ContainSubstring("strict-pdb")))
+				Expect(result.Execution.Result).To(Equal(upgradev1alpha1.CheckFailed))
+				Expect(result.Execution.Details).To(ContainElement(ContainSubstring("strict-pdb")))
 			})
 
 			It("returns Error when PDB list fails", func() {
@@ -568,7 +568,7 @@ var _ = Describe("PreflightController", func() {
 				}, nil)
 				result := reconciler.checkUpgradeableCondition(context.TODO(), log, defaultCheckTimeout)
 				Expect(result.Execution.State).To(Equal(upgradev1alpha1.CheckCompleted))
-				Expect(result.Result.Verdict).To(Equal(upgradev1alpha1.CheckPassed))
+				Expect(result.Execution.Result).To(Equal(upgradev1alpha1.CheckPassed))
 			})
 
 			It("returns Failed when Upgradeable condition is False", func() {
@@ -587,9 +587,9 @@ var _ = Describe("PreflightController", func() {
 				}, nil)
 				result := reconciler.checkUpgradeableCondition(context.TODO(), log, defaultCheckTimeout)
 				Expect(result.Execution.State).To(Equal(upgradev1alpha1.CheckCompleted))
-				Expect(result.Result.Verdict).To(Equal(upgradev1alpha1.CheckFailed))
-				Expect(result.Result.Message).To(ContainSubstring("AdminAckRequired"))
-				Expect(result.Result.Details).To(ContainElement(ContainSubstring("AdminAckRequired")))
+				Expect(result.Execution.Result).To(Equal(upgradev1alpha1.CheckFailed))
+				Expect(result.Execution.Message).To(ContainSubstring("AdminAckRequired"))
+				Expect(result.Execution.Details).To(ContainElement(ContainSubstring("AdminAckRequired")))
 			})
 
 			It("returns Error when GetClusterVersion fails", func() {
@@ -615,7 +615,7 @@ var _ = Describe("PreflightController", func() {
 					})
 				result := reconciler.checkPullSecretValid(context.TODO(), log, defaultCheckTimeout)
 				Expect(result.Execution.State).To(Equal(upgradev1alpha1.CheckCompleted))
-				Expect(result.Result.Verdict).To(Equal(upgradev1alpha1.CheckPassed))
+				Expect(result.Execution.Result).To(Equal(upgradev1alpha1.CheckPassed))
 			})
 
 			It("returns Failed when pull secret is missing the required auth key", func() {
@@ -631,8 +631,8 @@ var _ = Describe("PreflightController", func() {
 					})
 				result := reconciler.checkPullSecretValid(context.TODO(), log, defaultCheckTimeout)
 				Expect(result.Execution.State).To(Equal(upgradev1alpha1.CheckCompleted))
-				Expect(result.Result.Verdict).To(Equal(upgradev1alpha1.CheckFailed))
-				Expect(result.Result.Message).To(ContainSubstring("pull secret"))
+				Expect(result.Execution.Result).To(Equal(upgradev1alpha1.CheckFailed))
+				Expect(result.Execution.Message).To(ContainSubstring("pull secret"))
 			})
 
 			It("returns Failed when pull secret Secret does not exist", func() {
@@ -642,7 +642,7 @@ var _ = Describe("PreflightController", func() {
 					Return(fmt.Errorf("cannot fetch pull secret: secret not found"))
 				result := reconciler.checkPullSecretValid(context.TODO(), log, defaultCheckTimeout)
 				Expect(result.Execution.State).To(Equal(upgradev1alpha1.CheckCompleted))
-				Expect(result.Result.Verdict).To(Equal(upgradev1alpha1.CheckFailed))
+				Expect(result.Execution.Result).To(Equal(upgradev1alpha1.CheckFailed))
 			})
 		})
 
@@ -658,8 +658,8 @@ var _ = Describe("PreflightController", func() {
 					})
 				result := reconciler.checkAdminAcks(context.TODO(), instance, log, defaultCheckTimeout)
 				Expect(result.Execution.State).To(Equal(upgradev1alpha1.CheckCompleted))
-				Expect(result.Result.Verdict).To(Equal(upgradev1alpha1.CheckPassed))
-				Expect(result.Result.Details).To(HaveLen(1))
+				Expect(result.Execution.Result).To(Equal(upgradev1alpha1.CheckPassed))
+				Expect(result.Execution.Details).To(HaveLen(1))
 			})
 
 			It("returns Failed when admin-acks ConfigMap is missing and target is set", func() {
@@ -667,8 +667,8 @@ var _ = Describe("PreflightController", func() {
 					Return(apierrors.NewNotFound(schema.GroupResource{Resource: "configmaps"}, "admin-acks"))
 				result := reconciler.checkAdminAcks(context.TODO(), instance, log, defaultCheckTimeout)
 				Expect(result.Execution.State).To(Equal(upgradev1alpha1.CheckCompleted))
-				Expect(result.Result.Verdict).To(Equal(upgradev1alpha1.CheckFailed))
-				Expect(result.Result.Message).To(ContainSubstring("not found"))
+				Expect(result.Execution.Result).To(Equal(upgradev1alpha1.CheckFailed))
+				Expect(result.Execution.Message).To(ContainSubstring("not found"))
 			})
 
 			It("returns Failed when admin-acks ConfigMap exists but is empty", func() {
@@ -680,8 +680,8 @@ var _ = Describe("PreflightController", func() {
 					})
 				result := reconciler.checkAdminAcks(context.TODO(), instance, log, defaultCheckTimeout)
 				Expect(result.Execution.State).To(Equal(upgradev1alpha1.CheckCompleted))
-				Expect(result.Result.Verdict).To(Equal(upgradev1alpha1.CheckFailed))
-				Expect(result.Result.Message).To(ContainSubstring("no entries"))
+				Expect(result.Execution.Result).To(Equal(upgradev1alpha1.CheckFailed))
+				Expect(result.Execution.Message).To(ContainSubstring("no entries"))
 			})
 
 			It("returns Error when ConfigMap read fails with non-NotFound error", func() {

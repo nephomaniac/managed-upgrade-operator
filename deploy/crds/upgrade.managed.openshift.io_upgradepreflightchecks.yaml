@@ -129,21 +129,41 @@ spec:
             properties:
               checks:
                 items:
-                  description: PreflightCheckResult holds the execution state and
+                  description: PreflightCheckResult holds the execution outcome and
                     finding for a single preflight check.
                   properties:
+                    description:
+                      description: |-
+                        Description explains what this check validates, why it matters for upgrades,
+                        and what cluster resources it examines. Educational context for cluster administrators.
+                      type: string
                     execution:
-                      description: Execution describes whether the check ran successfully.
+                      description: Execution contains the state, result, and details
+                        from running the check.
                       properties:
-                        description:
+                        details:
                           description: |-
-                            Description explains what this check validates, why it matters for upgrades,
-                            and what cluster resources it examines. Educational context for cluster administrators.
-                          type: string
+                            Details contains per-item findings (e.g. individual alert names, node names).
+                            Structured for tooling; parse with jq/yq via .execution.details[].
+                          items:
+                            type: string
+                          type: array
                         error:
                           description: |-
                             Error contains the reason a check could not run (State=Error only).
                             This is an infrastructure/transient failure, not a cluster health finding.
+                          type: string
+                        message:
+                          description: Message is a human-readable summary (typically
+                            present when Result=Failed).
+                          type: string
+                        result:
+                          description: 'Result is the health verdict: Passed, Failed,
+                            or Unknown.'
+                          enum:
+                          - Passed
+                          - Failed
+                          - Unknown
                           type: string
                         state:
                           description: 'State is the execution outcome: Completed,
@@ -154,37 +174,13 @@ spec:
                           - Skipped
                           type: string
                       required:
+                      - result
                       - state
                       type: object
                     name:
                       description: Name identifies the check (e.g. "CriticalAlerts",
                         "ClusterOperators").
                       type: string
-                    result:
-                      description: Result contains the health finding. Only present
-                        when Execution.State=Completed.
-                      properties:
-                        details:
-                          description: |-
-                            Details contains per-item findings (e.g. individual alert names, node names).
-                            Structured for tooling; parse with jq/yq via .result.details[].
-                          items:
-                            type: string
-                          type: array
-                        message:
-                          description: Message is a human-readable summary of the
-                            finding (present on Failed).
-                          type: string
-                        verdict:
-                          description: Verdict is Passed if the cluster is healthy
-                            for this check, Failed otherwise.
-                          enum:
-                          - Passed
-                          - Failed
-                          type: string
-                      required:
-                      - verdict
-                      type: object
                   required:
                   - execution
                   - name
