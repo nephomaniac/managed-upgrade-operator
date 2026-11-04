@@ -70,13 +70,13 @@ type CheckResponse struct {
 type CheckResult struct {
 	Name        string               `json:"name"`
 	Description string               `json:"description,omitempty"`
+	Result      string               `json:"result"`
 	Execution   CheckResultExecution `json:"execution"`
 }
 
-// CheckResultExecution holds execution state and result for a check.
+// CheckResultExecution holds execution state and details for a check.
 type CheckResultExecution struct {
 	State   string   `json:"state"`
-	Result  string   `json:"result"`
 	Message string   `json:"message,omitempty"`
 	Details []string `json:"details,omitempty"`
 	Error   string   `json:"error,omitempty"`
@@ -480,9 +480,9 @@ func buildResponse(requestID string, cr *upgradev1alpha1.UpgradePreflightCheck) 
 		r := CheckResult{
 			Name:        c.Name,
 			Description: c.Description,
+			Result:      string(c.Result),
 			Execution: CheckResultExecution{
 				State:   string(c.Execution.State),
-				Result:  string(c.Execution.Result),
 				Message: c.Execution.Message,
 				Details: c.Execution.Details,
 				Error:   c.Execution.Error,
@@ -490,7 +490,7 @@ func buildResponse(requestID string, cr *upgradev1alpha1.UpgradePreflightCheck) 
 		}
 
 		// Track check outcomes for summary
-		switch c.Execution.Result {
+		switch c.Result {
 		case upgradev1alpha1.CheckPassed:
 			resp.ChecksPassed++
 		case upgradev1alpha1.CheckFailed:

@@ -207,10 +207,10 @@ func (r *ReconcileUpgradePreflightCheck) runChecks(
 		if !checkAllowed(name, enabled) {
 			logger.V(4).Info("Skipping check (not in allowlist)", "check", name)
 			results = append(results, upgradev1alpha1.PreflightCheckResult{
-				Name: name,
+				Name:   name,
+				Result: upgradev1alpha1.CheckUnknown,
 				Execution: upgradev1alpha1.CheckExecution{
-					State:  upgradev1alpha1.CheckSkipped,
-					Result: upgradev1alpha1.CheckUnknown,
+					State: upgradev1alpha1.CheckSkipped,
 				},
 			})
 			continue
@@ -264,9 +264,9 @@ func completedResult(name, description string, result upgradev1alpha1.CheckResul
 	return upgradev1alpha1.PreflightCheckResult{
 		Name:        name,
 		Description: description,
+		Result:      result,
 		Execution: upgradev1alpha1.CheckExecution{
 			State:   upgradev1alpha1.CheckCompleted,
-			Result:  result,
 			Message: message,
 			Details: details,
 		},
@@ -278,10 +278,10 @@ func errorResult(name, description, errMsg string) upgradev1alpha1.PreflightChec
 	return upgradev1alpha1.PreflightCheckResult{
 		Name:        name,
 		Description: description,
+		Result:      upgradev1alpha1.CheckUnknown,
 		Execution: upgradev1alpha1.CheckExecution{
-			State:  upgradev1alpha1.CheckError,
-			Result: upgradev1alpha1.CheckUnknown,
-			Error:  errMsg,
+			State: upgradev1alpha1.CheckError,
+			Error: errMsg,
 		},
 	}
 }

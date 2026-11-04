@@ -53,12 +53,10 @@ const (
 	CheckUnknown CheckResult = "Unknown"
 )
 
-// CheckExecution describes the outcome of running a preflight check.
+// CheckExecution describes how a preflight check executed.
 type CheckExecution struct {
 	// State is the execution outcome: Completed, Error, or Skipped.
 	State CheckExecutionState `json:"state"`
-	// Result is the health verdict: Passed, Failed, or Unknown.
-	Result CheckResult `json:"result"`
 	// Message is a human-readable summary (typically present when Result=Failed).
 	// +kubebuilder:validation:Optional
 	Message string `json:"message,omitempty"`
@@ -80,7 +78,9 @@ type PreflightCheckResult struct {
 	// and what cluster resources it examines. Educational context for cluster administrators.
 	// +kubebuilder:validation:Optional
 	Description string `json:"description,omitempty"`
-	// Execution contains the state, result, and details from running the check.
+	// Result is the health verdict: Passed, Failed, or Unknown.
+	Result CheckResult `json:"result"`
+	// Execution contains the state and details from running the check.
 	Execution CheckExecution `json:"execution"`
 }
 
