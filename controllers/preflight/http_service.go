@@ -68,16 +68,18 @@ type CheckResponse struct {
 
 // CheckResult is a per-check entry within CheckResponse.
 type CheckResult struct {
-	Name      string               `json:"name"`
-	Execution CheckResultExecution `json:"execution"`
-	Status    string               `json:"status"`
-	Message   string               `json:"message,omitempty"`
-	Details   []string             `json:"details,omitempty"`
+	Name        string               `json:"name"`
+	Description string               `json:"description,omitempty"`
+	Execution   CheckResultExecution `json:"execution"`
 }
 
-// CheckResultExecution holds execution metadata for a check result.
+// CheckResultExecution holds execution state and result for a check.
 type CheckResultExecution struct {
-	Description string `json:"description,omitempty"`
+	State   string   `json:"state"`
+	Result  string   `json:"result"`
+	Message string   `json:"message,omitempty"`
+	Details []string `json:"details,omitempty"`
+	Error   string   `json:"error,omitempty"`
 }
 
 // PreflightHTTPServer serves the preflight check HTTP API.
@@ -476,40 +478,33 @@ func buildResponse(requestID string, cr *upgradev1alpha1.UpgradePreflightCheck) 
 	anyBad := false
 	for _, c := range cr.Status.Checks {
 		r := CheckResult{
-			Name: c.Name,
+			Name:        c.Name,
+			Description: c.Description,
 			Execution: CheckResultExecution{
-				Description: c.Description,
+				State:   string(c.Execution.State),
+				Result:  string(c.Execution.Result),
+				Message: c.Execution.Message,
+				Details: c.Execution.Details,
+				Error:   c.Execution.Error,
 			},
 		}
 
-		// Map execution.result to status
+		// Track check outcomes for summary
 		switch c.Execution.Result {
 		case upgradev1alpha1.CheckPassed:
-			r.Status = "passed"
 			resp.ChecksPassed++
 		case upgradev1alpha1.CheckFailed:
-			r.Status = "failed"
 			resp.ChecksFailed++
 			anyBad = true
 		case upgradev1alpha1.CheckUnknown:
 			if c.Execution.State == upgradev1alpha1.CheckError {
-				r.Status = "error"
 				resp.ChecksErrored++
 				anyBad = true
 			} else {
-				r.Status = "skipped"
 				resp.ChecksSkipped++
 			}
 		}
 
-		// Set message and details
-		r.Message = c.Execution.Message
-		r.Details = c.Execution.Details
-		if c.Execution.State == upgradev1alpha1.CheckError {
-			r.Message = c.Execution.Error
-		}
-
-		// Track completed checks
 		if c.Execution.State == upgradev1alpha1.CheckCompleted {
 			resp.ChecksCompleted++
 		}
