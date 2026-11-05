@@ -753,6 +753,7 @@ var _ = Describe("PreflightController", func() {
 
 			It("returns Error when PDB list fails", func() {
 				mockMetricsBuilder.EXPECT().NewClient(gomock.Any()).Return(mockMetrics, nil)
+				mockMetrics.EXPECT().UpdateMetricHealthcheckFailed(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).AnyTimes()
 				mockClient.EXPECT().List(gomock.Any(), gomock.AssignableToTypeOf(&policyv1.PodDisruptionBudgetList{}), gomock.Any()).
 					Return(fmt.Errorf("pdb list failed"))
 				result := reconciler.checkPodDisruptionBudgets(context.TODO(), log, defaultCheckTimeout)
