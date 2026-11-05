@@ -77,6 +77,9 @@ type CheckFinding struct {
 type PreflightCheckResult struct {
 	// Name identifies the check (e.g. "CriticalAlerts", "ClusterOperators").
 	Name string `json:"name"`
+	// Description is a human-readable explanation of what this check validates and why it matters.
+	// +kubebuilder:validation:Optional
+	Description string `json:"description,omitempty"`
 	// Execution describes whether the check ran successfully.
 	Execution CheckExecution `json:"execution"`
 	// Result contains the health finding. Only present when Execution.State=Completed.
