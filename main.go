@@ -327,6 +327,14 @@ func main() {
 	// Accessible via the Kubernetes API server proxy without port-forwarding:
 	//   kubectl get --raw /api/v1/namespaces/openshift-managed-upgrade-operator/services/https:managed-upgrade-operator-preflight:8443/proxy/api/v1/preflight-checks
 	go func() {
+		// Recover any panic that escapes the HTTP service so a fault here cannot
+		// crash the controller-manager process or disrupt in-flight upgrades.
+		defer func() {
+			if p := recover(); p != nil {
+				setupLog.Error(fmt.Errorf("%v", p),
+					"panic in preflight HTTP service goroutine; HTTP API for preflight checks disabled")
+			}
+		}()
 		httpSrv := &preflight.PreflightHTTPServer{
 			Client:    mgr.GetClient(),
 			Namespace: operatorNS,

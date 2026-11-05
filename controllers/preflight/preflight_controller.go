@@ -37,6 +37,18 @@ const (
 	preflightControllerFeatureGate = "PreflightController"
 	defaultCheckTimeout            = 30 * time.Second
 	prometheusRetries              = 3
+
+	// maxPreflightChecks is the maximum number of UpgradePreflightCheck CRs allowed
+	// cluster-wide at any time. Creating more than this returns a rejection status.
+	// Delete completed CRs to make room for new ones.
+	maxPreflightChecks = 10
+
+	// preflightCheckTTL is the age after which a UpgradePreflightCheck CR is auto-deleted.
+	preflightCheckTTL = 24 * time.Hour
+
+	// deleteAfterAnnotation is set by the HTTP service to record an explicit expiry time.
+	// The controller respects it in addition to the creation-timestamp-based TTL.
+	deleteAfterAnnotation = "preflight.managed.openshift.io/delete-after"
 )
 
 // prometheusRetryBase is a var so tests in this package can override it to avoid slow backoff waits.
@@ -94,6 +106,37 @@ type ReconcileUpgradePreflightCheck struct {
 	DvoClientBuilder     dvo.DvoClientBuilder
 }
 
+// pruneAndCount deletes expired UpgradePreflightCheck CRs (by TTL or delete-after annotation)
+// and returns the total number of remaining CRs in the namespace (excluding skipName).
+// Errors deleting individual CRs are logged but do not stop the scan.
+func (r *ReconcileUpgradePreflightCheck) pruneAndCount(ctx context.Context, namespace, skipName string, logger logr.Logger) (int, error) {
+	list := &upgradev1alpha1.UpgradePreflightCheckList{}
+	if err := r.Client.List(ctx, list, client.InNamespace(namespace)); err != nil {
+		return 0, fmt.Errorf("listing UpgradePreflightChecks: %w", err)
+	}
+	now := time.Now()
+	remaining := 0
+	for i := range list.Items {
+		cr := &list.Items[i]
+		expired := cr.CreationTimestamp.Time.Add(preflightCheckTTL).Before(now)
+		if ann := cr.Annotations[deleteAfterAnnotation]; ann != "" {
+			if t, err := time.Parse(time.RFC3339, ann); err == nil && t.Before(now) {
+				expired = true
+			}
+		}
+		if expired && cr.Name != skipName {
+			logger.Info("Pruning expired UpgradePreflightCheck", "name", cr.Name,
+				"age", now.Sub(cr.CreationTimestamp.Time).Round(time.Minute))
+			if err := r.Client.Delete(ctx, cr); err != nil && !apierrors.IsNotFound(err) {
+				logger.Error(err, "Failed to prune expired UpgradePreflightCheck", "name", cr.Name)
+			}
+			continue
+		}
+		remaining++
+	}
+	return remaining, nil
+}
+
 func (r *ReconcileUpgradePreflightCheck) Reconcile(ctx context.Context, req reconcile.Request) (result reconcile.Result, err error) {
 	logger := log.WithValues("Request.Namespace", req.Namespace, "Request.Name", req.Name)
 
@@ -134,6 +177,35 @@ func (r *ReconcileUpgradePreflightCheck) Reconcile(ctx context.Context, req reco
 	}
 
 	if instance.Status.CompletedAt != nil {
+		return reconcile.Result{}, nil
+	}
+
+	// Prune expired CRs and enforce the cluster-wide limit.
+	// This runs after the completed-check so already-finished CRs skip it on requeue.
+	if total, listErr := r.pruneAndCount(ctx, req.Namespace, instance.Name, logger); listErr != nil {
+		logger.Error(listErr, "Could not list UpgradePreflightChecks; skipping limit enforcement")
+	} else if total >= maxPreflightChecks {
+		logger.Info("UpgradePreflightCheck limit reached; marking CR as rejected",
+			"limit", maxPreflightChecks, "current", total, "name", instance.Name)
+		now := metav1.NewTime(time.Now())
+		if instance.Status.StartedAt == nil {
+			instance.Status.StartedAt = &now
+		}
+		instance.Status.CompletedAt = &now
+		instance.Status.Checks = []upgradev1alpha1.PreflightCheckResult{{
+			Name: "LimitCheck",
+			Execution: upgradev1alpha1.CheckExecution{
+				State: upgradev1alpha1.CheckError,
+				Error: fmt.Sprintf(
+					"too many UpgradePreflightCheck CRs (%d/%d). "+
+						"Delete completed checks before creating new ones. "+
+						"Checks older than 24 hours are pruned automatically.",
+					total, maxPreflightChecks),
+			},
+		}}
+		if err := r.Client.Status().Update(ctx, instance); err != nil {
+			logger.Error(err, "Failed to write rejection status to UpgradePreflightCheck")
+		}
 		return reconcile.Result{}, nil
 	}
 
@@ -230,6 +302,11 @@ func (r *ReconcileUpgradePreflightCheck) runChecks(
 			continue
 		}
 		fn := dispatch[name]
+		if fn == nil {
+			logger.Error(nil, "Check has no registered implementation; skipping", "check", name)
+			results = append(results, errorResult(name, fmt.Sprintf("check %q has no registered implementation — this is a controller bug", name)))
+			continue
+		}
 		results = append(results, safeRun(name, fn))
 	}
 	return results
@@ -716,6 +793,19 @@ func (r *ReconcileUpgradePreflightCheck) checkPodDisruptionBudgets(
 ) upgradev1alpha1.PreflightCheckResult {
 	const checkName = "PodDisruptionBudgets"
 	logger.Info("Running baseline check", "check", checkName)
+
+	if r.DvoClientBuilder == nil {
+		return errorResult(checkName, "DvoClientBuilder is not configured — redeploy the operator to fix this")
+	}
+
+	// Respect the per-check timeout: bail early if the reconcile context is already done.
+	// Note: upgraders.HealthCheckPDB does not accept a context, so sub-operations within
+	// it use context.Background() internally. The timeout here guards the operations we control.
+	checkCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	if checkCtx.Err() != nil {
+		return errorResult(checkName, fmt.Sprintf("context done before check could start: %v", checkCtx.Err()))
+	}
 
 	metricsClient, err := r.MetricsClientBuilder.NewClient(r.Client)
 	if err != nil {

@@ -135,6 +135,18 @@ func (s *PreflightHTTPServer) Start(ctx context.Context) error {
 
 // route dispatches based on method and path.
 func (s *PreflightHTTPServer) route(w http.ResponseWriter, r *http.Request) {
+	// Catch any panic in a handler so a nil-pointer or unexpected error in this
+	// controller cannot crash the net/http goroutine and take down the HTTP service.
+	// Go's net/http recovers handler panics too, but logs them to stderr; this gives
+	// us structured logging and a proper 500 response.
+	defer func() {
+		if p := recover(); p != nil {
+			s.Logger.Error(fmt.Errorf("%v", p), "panic in preflight HTTP handler; request aborted",
+				"method", r.Method, "path", r.URL.Path)
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+		}
+	}()
+
 	token := extractBearerToken(r)
 	if token == "" {
 		http.Error(w, "Authorization: Bearer <token> required", http.StatusUnauthorized)
