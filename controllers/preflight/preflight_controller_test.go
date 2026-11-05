@@ -228,6 +228,7 @@ var _ = Describe("PreflightController", func() {
 				// check calls (all checks enabled)
 				mockCvBuilder.EXPECT().New(gomock.Any()).Return(mockCv).AnyTimes()
 				mockCv.EXPECT().GetClusterVersion().Return(&configv1.ClusterVersion{}, nil).Times(2) // ClusterVersion + UpgradeableCondition
+				mockClient.EXPECT().List(gomock.Any(), gomock.AssignableToTypeOf(&configv1.ClusterOperatorList{}), gomock.Any()).Return(nil) // extended CO operator list
 				mockCv.EXPECT().HasDegradedOperators().Return(&clusterversion.HasDegradedOperatorsResult{}, nil).Times(2) // baseline CO + extended CO
 				// 6 NewClient calls: baseline CO, baseline CA, extended CA, baseline MCN, baseline NT, baseline PDB
 				mockMetricsBuilder.EXPECT().NewClient(gomock.Any()).Return(mockMetrics, nil).Times(6)
@@ -567,6 +568,7 @@ var _ = Describe("PreflightController", func() {
 		Context("checkClusterOperatorsExtended", func() {
 			It("returns Passed when no operators are degraded", func() {
 				mockCvBuilder.EXPECT().New(gomock.Any()).Return(mockCv)
+				mockClient.EXPECT().List(gomock.Any(), gomock.AssignableToTypeOf(&configv1.ClusterOperatorList{}), gomock.Any()).Return(nil)
 				mockCv.EXPECT().HasDegradedOperators().Return(&clusterversion.HasDegradedOperatorsResult{
 					Degraded: []string{},
 				}, nil)
@@ -577,6 +579,7 @@ var _ = Describe("PreflightController", func() {
 
 			It("returns Failed with degraded operator names", func() {
 				mockCvBuilder.EXPECT().New(gomock.Any()).Return(mockCv)
+				mockClient.EXPECT().List(gomock.Any(), gomock.AssignableToTypeOf(&configv1.ClusterOperatorList{}), gomock.Any()).Return(nil)
 				mockCv.EXPECT().HasDegradedOperators().Return(&clusterversion.HasDegradedOperatorsResult{
 					Degraded: []string{"kube-apiserver", "etcd"},
 				}, nil)
@@ -588,6 +591,7 @@ var _ = Describe("PreflightController", func() {
 
 			It("returns Error when HasDegradedOperators fails", func() {
 				mockCvBuilder.EXPECT().New(gomock.Any()).Return(mockCv)
+				mockClient.EXPECT().List(gomock.Any(), gomock.AssignableToTypeOf(&configv1.ClusterOperatorList{}), gomock.Any()).Return(nil)
 				mockCv.EXPECT().HasDegradedOperators().Return(nil, fmt.Errorf("co list failed"))
 				result := reconciler.checkClusterOperatorsExtended(context.TODO(), log, defaultCheckTimeout)
 				Expect(result.Execution.State).To(Equal(upgradev1alpha1.CheckError))

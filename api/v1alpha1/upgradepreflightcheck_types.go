@@ -44,10 +44,25 @@ const (
 type CheckExecution struct {
 	// State is the execution outcome: Completed, Error, or Skipped.
 	State CheckExecutionState `json:"state"`
+	// Message is a concise human-readable summary of what the check found.
+	// +kubebuilder:validation:Optional
+	Message string `json:"message,omitempty"`
+	// Details contains per-item information (e.g. all operator statuses, all PDB specs, all node names).
+	// +kubebuilder:validation:Optional
+	Details []string `json:"details,omitempty"`
 	// Error contains the reason a check could not run (State=Error only).
 	// This is an infrastructure/transient failure, not a cluster health finding.
 	// +kubebuilder:validation:Optional
 	Error string `json:"error,omitempty"`
+	// StartedAt is when this individual check began executing.
+	// +kubebuilder:validation:Optional
+	StartedAt *metav1.Time `json:"startedAt,omitempty"`
+	// CompletedAt is when this individual check finished executing.
+	// +kubebuilder:validation:Optional
+	CompletedAt *metav1.Time `json:"completedAt,omitempty"`
+	// TimeoutSeconds is the timeout applied to this check.
+	// +kubebuilder:validation:Optional
+	TimeoutSeconds int32 `json:"timeoutSeconds,omitempty"`
 }
 
 // CheckVerdict is the health verdict when a check completes successfully.

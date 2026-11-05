@@ -414,6 +414,10 @@ func createFakeUpgradeConfig(targetVersion string) *upgradev1alpha1.UpgradeConfi
 	}
 }
 
+// applyTiming sets per-check timing fields on the named return value via defer.
+// Usage: defer applyCheckTiming(&result, startTime, timeoutSec, &execMsg, &execDetails)()
+// (not used directly — timing is applied inline via defer closures per function)
+
 // checkClusterVersion reads the current cluster version from CVO.
 // This check always passes and is informational — it validates the check
 // architecture and provides baseline context alongside health checks.
@@ -421,9 +425,22 @@ func (r *ReconcileUpgradePreflightCheck) checkClusterVersion(
 	ctx context.Context,
 	logger logr.Logger,
 	timeout time.Duration,
-) upgradev1alpha1.PreflightCheckResult {
+) (result upgradev1alpha1.PreflightCheckResult) {
 	const checkName = "ClusterVersion"
 	logger.Info("Running check", "check", checkName)
+
+	startTime := metav1.Now()
+	timeoutSec := int32(timeout.Seconds())
+	var execMsg string
+	var execDetails []string
+	defer func() {
+		completedTime := metav1.Now()
+		result.Execution.StartedAt = &startTime
+		result.Execution.CompletedAt = &completedTime
+		result.Execution.TimeoutSeconds = timeoutSec
+		result.Execution.Message = execMsg
+		result.Execution.Details = execDetails
+	}()
 
 	_, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -432,6 +449,7 @@ func (r *ReconcileUpgradePreflightCheck) checkClusterVersion(
 	clusterVersion, err := cvClient.GetClusterVersion()
 	if err != nil {
 		logger.Error(err, "Check error", "check", checkName)
+		execMsg = "unable to read cluster version"
 		return withDesc(errorResult(checkName, fmt.Sprintf("unable to get cluster version: %v", err)), descClusterVersion)
 	}
 
@@ -440,6 +458,8 @@ func (r *ReconcileUpgradePreflightCheck) checkClusterVersion(
 		version = clusterVersion.Status.Desired.Version
 	}
 	logger.Info("Check passed", "check", checkName, "currentVersion", version)
+	execMsg = fmt.Sprintf("Cluster version %s", version)
+	execDetails = []string{fmt.Sprintf("currentVersion=%s", version)}
 	return withDesc(completedResult(checkName, upgradev1alpha1.CheckFinding{
 		Verdict: upgradev1alpha1.CheckPassed,
 		Details: []string{fmt.Sprintf("currentVersion=%s", version)},
@@ -452,21 +472,38 @@ func (r *ReconcileUpgradePreflightCheck) checkClusterOperators(
 	ctx context.Context,
 	logger logr.Logger,
 	timeout time.Duration,
-) upgradev1alpha1.PreflightCheckResult {
+) (result upgradev1alpha1.PreflightCheckResult) {
 	const checkName = "ClusterOperators"
 	logger.Info("Running baseline check", "check", checkName)
+
+	startTime := metav1.Now()
+	timeoutSec := int32(timeout.Seconds())
+	var execMsg string
+	var execDetails []string
+	defer func() {
+		completedTime := metav1.Now()
+		result.Execution.StartedAt = &startTime
+		result.Execution.CompletedAt = &completedTime
+		result.Execution.TimeoutSeconds = timeoutSec
+		result.Execution.Message = execMsg
+		result.Execution.Details = execDetails
+	}()
 
 	_, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
 	metricsClient, err := r.MetricsClientBuilder.NewClient(r.Client)
 	if err != nil {
+		execMsg = "unable to build metrics client"
 		return withDesc(errorResult(checkName, fmt.Sprintf("Baseline check: failed to create metrics client: %v", err)), descClusterOperators)
 	}
+
+	execDetails = []string{"Uses MUO's upgrade validation logic (upgraders.ClusterOperators)"}
 
 	fakeUC := createFakeUpgradeConfig("4.15.0")
 	passed, err := upgraders.ClusterOperators(metricsClient, r.CvClientBuilder.New(r.Client), fakeUC, logger, "")
 	if err != nil {
+		execMsg = "upgrade validation failed: degraded operators detected"
 		return withDesc(completedResult(checkName, upgradev1alpha1.CheckFinding{
 			Verdict: upgradev1alpha1.CheckFailed,
 			Message: fmt.Sprintf("Baseline check: degraded operators detected: %v", err),
@@ -474,6 +511,7 @@ func (r *ReconcileUpgradePreflightCheck) checkClusterOperators(
 		}), descClusterOperators)
 	}
 	if !passed {
+		execMsg = "upgrade validation failed: degraded operators detected"
 		return withDesc(completedResult(checkName, upgradev1alpha1.CheckFinding{
 			Verdict: upgradev1alpha1.CheckFailed,
 			Message: "Baseline check: degraded operators detected (upgraders.ClusterOperators)",
@@ -482,33 +520,67 @@ func (r *ReconcileUpgradePreflightCheck) checkClusterOperators(
 	}
 
 	logger.Info("Baseline check passed", "check", checkName)
+	execMsg = "Upgrade validation passed: no degraded operators detected"
 	return withDesc(completedResult(checkName, upgradev1alpha1.CheckFinding{
 		Verdict: upgradev1alpha1.CheckPassed,
 		Details: []string{"This check uses the same validation the upgrade process uses"},
 	}), descClusterOperators)
 }
 
-// checkClusterOperatorsExtended checks for any degraded ClusterOperator.
+// checkClusterOperatorsExtended checks for any degraded ClusterOperator and lists all operators with their status.
 func (r *ReconcileUpgradePreflightCheck) checkClusterOperatorsExtended(
 	ctx context.Context,
 	logger logr.Logger,
 	timeout time.Duration,
-) upgradev1alpha1.PreflightCheckResult {
+) (result upgradev1alpha1.PreflightCheckResult) {
 	const checkName = "ClusterOperatorsExtended"
 	logger.Info("Running check", "check", checkName)
 
-	_, cancel := context.WithTimeout(ctx, timeout)
+	startTime := metav1.Now()
+	timeoutSec := int32(timeout.Seconds())
+	var execMsg string
+	var execDetails []string
+	defer func() {
+		completedTime := metav1.Now()
+		result.Execution.StartedAt = &startTime
+		result.Execution.CompletedAt = &completedTime
+		result.Execution.TimeoutSeconds = timeoutSec
+		result.Execution.Message = execMsg
+		result.Execution.Details = execDetails
+	}()
+
+	checkCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
+
+	// List all ClusterOperators for rich per-operator details.
+	coList := &configv1.ClusterOperatorList{}
+	if err := r.Client.List(checkCtx, coList); err == nil {
+		for _, co := range coList.Items {
+			availStatus := "Unknown"
+			degradedStatus := "Unknown"
+			for _, cond := range co.Status.Conditions {
+				if cond.Type == configv1.OperatorAvailable {
+					availStatus = string(cond.Status)
+				}
+				if cond.Type == configv1.OperatorDegraded {
+					degradedStatus = string(cond.Status)
+				}
+			}
+			execDetails = append(execDetails, fmt.Sprintf("%s: Available=%s, Degraded=%s", co.Name, availStatus, degradedStatus))
+		}
+	}
 
 	cvClient := r.CvClientBuilder.New(r.Client)
 	degraded, err := cvClient.HasDegradedOperators()
 	if err != nil {
 		logger.Error(err, "Check error", "check", checkName)
+		execMsg = "unable to fetch cluster operator status"
 		return withDesc(errorResult(checkName, fmt.Sprintf("unable to fetch cluster operator status: %v", err)), descClusterOperatorsExtended)
 	}
 
 	if len(degraded.Degraded) > 0 {
 		logger.Info("Check failed", "check", checkName, "degradedOperators", degraded.Degraded)
+		execMsg = fmt.Sprintf("%d degraded operator(s): %s", len(degraded.Degraded), strings.Join(degraded.Degraded, ", "))
 		return withDesc(completedResult(checkName, upgradev1alpha1.CheckFinding{
 			Verdict: upgradev1alpha1.CheckFailed,
 			Message: fmt.Sprintf("degraded operators: %s", strings.Join(degraded.Degraded, ", ")),
@@ -517,6 +589,11 @@ func (r *ReconcileUpgradePreflightCheck) checkClusterOperatorsExtended(
 	}
 
 	logger.Info("Check passed", "check", checkName)
+	if len(coList.Items) > 0 {
+		execMsg = fmt.Sprintf("All %d cluster operators healthy", len(coList.Items))
+	} else {
+		execMsg = "No degraded operators detected"
+	}
 	return withDesc(completedResult(checkName, upgradev1alpha1.CheckFinding{Verdict: upgradev1alpha1.CheckPassed}), descClusterOperatorsExtended)
 }
 
@@ -526,21 +603,38 @@ func (r *ReconcileUpgradePreflightCheck) checkCriticalAlerts(
 	ctx context.Context,
 	logger logr.Logger,
 	timeout time.Duration,
-) upgradev1alpha1.PreflightCheckResult {
+) (result upgradev1alpha1.PreflightCheckResult) {
 	const checkName = "CriticalAlerts"
 	logger.Info("Running baseline check", "check", checkName)
+
+	startTime := metav1.Now()
+	timeoutSec := int32(timeout.Seconds())
+	var execMsg string
+	var execDetails []string
+	defer func() {
+		completedTime := metav1.Now()
+		result.Execution.StartedAt = &startTime
+		result.Execution.CompletedAt = &completedTime
+		result.Execution.TimeoutSeconds = timeoutSec
+		result.Execution.Message = execMsg
+		result.Execution.Details = execDetails
+	}()
 
 	_, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
 	metricsClient, err := r.MetricsClientBuilder.NewClient(r.Client)
 	if err != nil {
+		execMsg = "unable to build metrics client"
 		return withDesc(errorResult(checkName, fmt.Sprintf("Baseline check: failed to create metrics client: %v", err)), descCriticalAlerts)
 	}
+
+	execDetails = []string{"Uses MUO's upgrade validation logic (upgraders.CriticalAlertsDefault)"}
 
 	fakeUC := createFakeUpgradeConfig("4.15.0")
 	passed, err := upgraders.CriticalAlertsDefault(metricsClient, fakeUC, logger, "")
 	if err != nil {
+		execMsg = "upgrade validation failed: critical alerts detected"
 		return withDesc(completedResult(checkName, upgradev1alpha1.CheckFinding{
 			Verdict: upgradev1alpha1.CheckFailed,
 			Message: fmt.Sprintf("Baseline check: critical alerts firing: %v", err),
@@ -548,6 +642,7 @@ func (r *ReconcileUpgradePreflightCheck) checkCriticalAlerts(
 		}), descCriticalAlerts)
 	}
 	if !passed {
+		execMsg = "upgrade validation failed: critical alerts detected"
 		return withDesc(completedResult(checkName, upgradev1alpha1.CheckFinding{
 			Verdict: upgradev1alpha1.CheckFailed,
 			Message: "Baseline check: critical alerts firing (upgraders.CriticalAlertsDefault)",
@@ -556,6 +651,7 @@ func (r *ReconcileUpgradePreflightCheck) checkCriticalAlerts(
 	}
 
 	logger.Info("Baseline check passed", "check", checkName)
+	execMsg = "Upgrade validation passed: no critical alerts firing"
 	return withDesc(completedResult(checkName, upgradev1alpha1.CheckFinding{
 		Verdict: upgradev1alpha1.CheckPassed,
 		Details: []string{"This check uses the same validation the upgrade process uses, including ignore lists"},
@@ -567,9 +663,22 @@ func (r *ReconcileUpgradePreflightCheck) checkCriticalAlertsExtended(
 	ctx context.Context,
 	logger logr.Logger,
 	timeout time.Duration,
-) upgradev1alpha1.PreflightCheckResult {
+) (result upgradev1alpha1.PreflightCheckResult) {
 	const checkName = "CriticalAlertsExtended"
 	logger.Info("Running check", "check", checkName)
+
+	startTime := metav1.Now()
+	timeoutSec := int32(timeout.Seconds())
+	var execMsg string
+	var execDetails []string
+	defer func() {
+		completedTime := metav1.Now()
+		result.Execution.StartedAt = &startTime
+		result.Execution.CompletedAt = &completedTime
+		result.Execution.TimeoutSeconds = timeoutSec
+		result.Execution.Message = execMsg
+		result.Execution.Details = execDetails
+	}()
 
 	checkCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -587,6 +696,7 @@ func (r *ReconcileUpgradePreflightCheck) checkCriticalAlertsExtended(
 				backoff := prometheusRetryBase * time.Duration(attempt)
 				select {
 				case <-checkCtx.Done():
+					execMsg = "timed out waiting for metrics client"
 					return withDesc(errorResult(checkName, fmt.Sprintf("timed out waiting for metrics client (last error: %v)", err)), descCriticalAlertsExtended)
 				case <-time.After(backoff):
 				}
@@ -600,6 +710,7 @@ func (r *ReconcileUpgradePreflightCheck) checkCriticalAlertsExtended(
 				backoff := prometheusRetryBase * time.Duration(attempt)
 				select {
 				case <-checkCtx.Done():
+					execMsg = "timed out querying Prometheus"
 					return withDesc(errorResult(checkName, fmt.Sprintf("timed out querying Prometheus (last error: %v)", err)), descCriticalAlertsExtended)
 				case <-time.After(backoff):
 				}
@@ -610,11 +721,14 @@ func (r *ReconcileUpgradePreflightCheck) checkCriticalAlertsExtended(
 	}
 
 	if err != nil {
+		execMsg = fmt.Sprintf("unable to query critical alerts after %d attempts", prometheusRetries)
 		return withDesc(errorResult(checkName, fmt.Sprintf("unable to query critical alerts after %d attempts: %v", prometheusRetries, err)), descCriticalAlertsExtended)
 	}
 
 	if len(alerts.Data.Result) == 0 {
 		logger.Info("Check passed", "check", checkName)
+		execMsg = "No critical alerts firing in core namespaces"
+		execDetails = []string{"No firing critical alerts found in openshift-*, kube-*, or default namespaces"}
 		return withDesc(completedResult(checkName, upgradev1alpha1.CheckFinding{Verdict: upgradev1alpha1.CheckPassed}), descCriticalAlertsExtended)
 	}
 
@@ -628,6 +742,8 @@ func (r *ReconcileUpgradePreflightCheck) checkCriticalAlertsExtended(
 		}
 	}
 	logger.Info("Check failed", "check", checkName, "firingAlerts", names)
+	execMsg = fmt.Sprintf("%d critical alert(s) firing: %s", len(names), strings.Join(names, ", "))
+	execDetails = names
 	return withDesc(completedResult(checkName, upgradev1alpha1.CheckFinding{
 		Verdict: upgradev1alpha1.CheckFailed,
 		Message: fmt.Sprintf("critical alert(s) firing: %s", strings.Join(names, ", ")),
@@ -641,21 +757,38 @@ func (r *ReconcileUpgradePreflightCheck) checkManuallyCordonedNodes(
 	ctx context.Context,
 	logger logr.Logger,
 	timeout time.Duration,
-) upgradev1alpha1.PreflightCheckResult {
+) (result upgradev1alpha1.PreflightCheckResult) {
 	const checkName = "ManuallyCordonedNodes"
 	logger.Info("Running baseline check", "check", checkName)
+
+	startTime := metav1.Now()
+	timeoutSec := int32(timeout.Seconds())
+	var execMsg string
+	var execDetails []string
+	defer func() {
+		completedTime := metav1.Now()
+		result.Execution.StartedAt = &startTime
+		result.Execution.CompletedAt = &completedTime
+		result.Execution.TimeoutSeconds = timeoutSec
+		result.Execution.Message = execMsg
+		result.Execution.Details = execDetails
+	}()
 
 	_, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
 	metricsClient, err := r.MetricsClientBuilder.NewClient(r.Client)
 	if err != nil {
+		execMsg = "unable to build metrics client"
 		return withDesc(errorResult(checkName, fmt.Sprintf("Baseline check: failed to create metrics client: %v", err)), descNodeHealth)
 	}
+
+	execDetails = []string{"Uses MUO's upgrade validation logic (upgraders.ManuallyCordonedNodes)"}
 
 	fakeUC := createFakeUpgradeConfig("4.15.0")
 	cordonedNodes, err := upgraders.ManuallyCordonedNodes(metricsClient, r.Machinery, r.Client, fakeUC, logger, "")
 	if err != nil && len(cordonedNodes) == 0 {
+		execMsg = "unable to check cordoned nodes"
 		return withDesc(errorResult(checkName, fmt.Sprintf("unable to check cordoned nodes: %v", err)), descNodeHealth)
 	}
 	if len(cordonedNodes) > 0 {
@@ -663,6 +796,7 @@ func (r *ReconcileUpgradePreflightCheck) checkManuallyCordonedNodes(
 		for _, node := range cordonedNodes {
 			details = append(details, fmt.Sprintf("cordoned worker node: %s", node))
 		}
+		execMsg = fmt.Sprintf("Upgrade validation failed: %d manually cordoned worker node(s)", len(cordonedNodes))
 		return withDesc(completedResult(checkName, upgradev1alpha1.CheckFinding{
 			Verdict: upgradev1alpha1.CheckFailed,
 			Message: fmt.Sprintf("Baseline check: %d manually cordoned worker node(s)", len(cordonedNodes)),
@@ -671,6 +805,7 @@ func (r *ReconcileUpgradePreflightCheck) checkManuallyCordonedNodes(
 	}
 
 	logger.Info("Baseline check passed", "check", checkName)
+	execMsg = "Upgrade validation passed: no manually cordoned nodes"
 	return withDesc(completedResult(checkName, upgradev1alpha1.CheckFinding{
 		Verdict: upgradev1alpha1.CheckPassed,
 		Details: []string{"This check uses the same validation the upgrade process uses, worker nodes only"},
@@ -682,9 +817,22 @@ func (r *ReconcileUpgradePreflightCheck) checkManuallyCordonedNodesExtended(
 	ctx context.Context,
 	logger logr.Logger,
 	timeout time.Duration,
-) upgradev1alpha1.PreflightCheckResult {
+) (result upgradev1alpha1.PreflightCheckResult) {
 	const checkName = "ManuallyCordonedNodesExtended"
 	logger.Info("Running check", "check", checkName)
+
+	startTime := metav1.Now()
+	timeoutSec := int32(timeout.Seconds())
+	var execMsg string
+	var execDetails []string
+	defer func() {
+		completedTime := metav1.Now()
+		result.Execution.StartedAt = &startTime
+		result.Execution.CompletedAt = &completedTime
+		result.Execution.TimeoutSeconds = timeoutSec
+		result.Execution.Message = execMsg
+		result.Execution.Details = execDetails
+	}()
 
 	checkCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -696,6 +844,7 @@ func (r *ReconcileUpgradePreflightCheck) checkManuallyCordonedNodesExtended(
 		},
 	}); err != nil {
 		logger.Error(err, "Check error", "check", checkName)
+		execMsg = "unable to list worker nodes"
 		return withDesc(errorResult(checkName, fmt.Sprintf("unable to list worker nodes: %v", err)), descNodeHealthExtended)
 	}
 
@@ -705,11 +854,15 @@ func (r *ReconcileUpgradePreflightCheck) checkManuallyCordonedNodesExtended(
 		cr := r.Machinery.IsNodeCordoned(node)
 		if cr.IsCordoned && !r.Machinery.IsNodeUpgrading(node) {
 			cordoned = append(cordoned, node.Name)
+			execDetails = append(execDetails, fmt.Sprintf("%s: manually cordoned", node.Name))
+		} else {
+			execDetails = append(execDetails, fmt.Sprintf("%s: schedulable", node.Name))
 		}
 	}
 
 	if len(cordoned) > 0 {
 		logger.Info("Check failed", "check", checkName, "cordonedNodes", cordoned)
+		execMsg = fmt.Sprintf("%d manually cordoned node(s) of %d worker node(s)", len(cordoned), len(nodes.Items))
 		return withDesc(completedResult(checkName, upgradev1alpha1.CheckFinding{
 			Verdict: upgradev1alpha1.CheckFailed,
 			Message: fmt.Sprintf("manually cordoned nodes: %s", strings.Join(cordoned, ", ")),
@@ -718,6 +871,7 @@ func (r *ReconcileUpgradePreflightCheck) checkManuallyCordonedNodesExtended(
 	}
 
 	logger.Info("Check passed", "check", checkName)
+	execMsg = fmt.Sprintf("All %d worker node(s) are schedulable", len(nodes.Items))
 	return withDesc(completedResult(checkName, upgradev1alpha1.CheckFinding{Verdict: upgradev1alpha1.CheckPassed}), descNodeHealthExtended)
 }
 
@@ -727,21 +881,38 @@ func (r *ReconcileUpgradePreflightCheck) checkNodeTaints(
 	ctx context.Context,
 	logger logr.Logger,
 	timeout time.Duration,
-) upgradev1alpha1.PreflightCheckResult {
+) (result upgradev1alpha1.PreflightCheckResult) {
 	const checkName = "NodeUnschedulableTaints"
 	logger.Info("Running baseline check", "check", checkName)
+
+	startTime := metav1.Now()
+	timeoutSec := int32(timeout.Seconds())
+	var execMsg string
+	var execDetails []string
+	defer func() {
+		completedTime := metav1.Now()
+		result.Execution.StartedAt = &startTime
+		result.Execution.CompletedAt = &completedTime
+		result.Execution.TimeoutSeconds = timeoutSec
+		result.Execution.Message = execMsg
+		result.Execution.Details = execDetails
+	}()
 
 	_, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
 	metricsClient, err := r.MetricsClientBuilder.NewClient(r.Client)
 	if err != nil {
+		execMsg = "unable to build metrics client"
 		return withDesc(errorResult(checkName, fmt.Sprintf("Baseline check: failed to create metrics client: %v", err)), descNodeHealth)
 	}
+
+	execDetails = []string{"Uses MUO's upgrade validation logic (upgraders.NodeUnschedulableTaints)"}
 
 	fakeUC := createFakeUpgradeConfig("4.15.0")
 	taintedNodes, err := upgraders.NodeUnschedulableTaints(metricsClient, r.Machinery, r.Client, fakeUC, logger, "")
 	if err != nil && len(taintedNodes) == 0 {
+		execMsg = "unable to check node taints"
 		return withDesc(errorResult(checkName, fmt.Sprintf("unable to check node taints: %v", err)), descNodeHealth)
 	}
 	if len(taintedNodes) > 0 {
@@ -749,6 +920,7 @@ func (r *ReconcileUpgradePreflightCheck) checkNodeTaints(
 		for _, node := range taintedNodes {
 			details = append(details, fmt.Sprintf("node with pressure taint: %s", node))
 		}
+		execMsg = fmt.Sprintf("Upgrade validation failed: %d node(s) with pressure taints", len(taintedNodes))
 		return withDesc(completedResult(checkName, upgradev1alpha1.CheckFinding{
 			Verdict: upgradev1alpha1.CheckFailed,
 			Message: fmt.Sprintf("Baseline check: %d node(s) with pressure taints", len(taintedNodes)),
@@ -757,6 +929,7 @@ func (r *ReconcileUpgradePreflightCheck) checkNodeTaints(
 	}
 
 	logger.Info("Baseline check passed", "check", checkName)
+	execMsg = "Upgrade validation passed: no pressure taints detected"
 	return withDesc(completedResult(checkName, upgradev1alpha1.CheckFinding{
 		Verdict: upgradev1alpha1.CheckPassed,
 		Details: []string{"This check uses the same validation the upgrade process uses, checks memory/disk/PID pressure taints"},
@@ -768,9 +941,22 @@ func (r *ReconcileUpgradePreflightCheck) checkNodeTaintsExtended(
 	ctx context.Context,
 	logger logr.Logger,
 	timeout time.Duration,
-) upgradev1alpha1.PreflightCheckResult {
+) (result upgradev1alpha1.PreflightCheckResult) {
 	const checkName = "NodeUnschedulableTaintsExtended"
 	logger.Info("Running check", "check", checkName)
+
+	startTime := metav1.Now()
+	timeoutSec := int32(timeout.Seconds())
+	var execMsg string
+	var execDetails []string
+	defer func() {
+		completedTime := metav1.Now()
+		result.Execution.StartedAt = &startTime
+		result.Execution.CompletedAt = &completedTime
+		result.Execution.TimeoutSeconds = timeoutSec
+		result.Execution.Message = execMsg
+		result.Execution.Details = execDetails
+	}()
 
 	checkCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -778,6 +964,7 @@ func (r *ReconcileUpgradePreflightCheck) checkNodeTaintsExtended(
 	nodes := &corev1.NodeList{}
 	if err := r.Client.List(checkCtx, nodes); err != nil {
 		logger.Error(err, "Check error", "check", checkName)
+		execMsg = "unable to list nodes"
 		return withDesc(errorResult(checkName, fmt.Sprintf("unable to list nodes: %v", err)), descNodeHealthExtended)
 	}
 
@@ -791,6 +978,11 @@ func (r *ReconcileUpgradePreflightCheck) checkNodeTaintsExtended(
 
 	if len(affected) > 0 {
 		logger.Info("Check failed", "check", checkName, "affectedNodes", affected)
+		execMsg = fmt.Sprintf("%d node(s) with pressure taints of %d total", len(affected), len(nodes.Items))
+		execDetails = append(execDetails, fmt.Sprintf("Total nodes checked: %d", len(nodes.Items)))
+		for _, name := range affected {
+			execDetails = append(execDetails, fmt.Sprintf("%s: unschedulable pressure taint", name))
+		}
 		return withDesc(completedResult(checkName, upgradev1alpha1.CheckFinding{
 			Verdict: upgradev1alpha1.CheckFailed,
 			Message: fmt.Sprintf("nodes with unschedulable taints: %s", strings.Join(affected, ", ")),
@@ -799,19 +991,36 @@ func (r *ReconcileUpgradePreflightCheck) checkNodeTaintsExtended(
 	}
 
 	logger.Info("Check passed", "check", checkName)
+	execMsg = fmt.Sprintf("All %d node(s) checked: no pressure taints", len(nodes.Items))
+	execDetails = []string{fmt.Sprintf("Checked %d node(s) for memory, disk, and PID pressure — all healthy", len(nodes.Items))}
 	return withDesc(completedResult(checkName, upgradev1alpha1.CheckFinding{Verdict: upgradev1alpha1.CheckPassed}), descNodeHealthExtended)
 }
 
-// checkPodDisruptionBudgetsExtended checks for PDBs that would block node drains.
+// checkPodDisruptionBudgets is a baseline wrapper that calls upgraders.HealthCheckPDB(),
+// the exact function the upgrade process uses for PDB validation.
 func (r *ReconcileUpgradePreflightCheck) checkPodDisruptionBudgets(
 	ctx context.Context,
 	logger logr.Logger,
 	timeout time.Duration,
-) upgradev1alpha1.PreflightCheckResult {
+) (result upgradev1alpha1.PreflightCheckResult) {
 	const checkName = "PodDisruptionBudgets"
 	logger.Info("Running baseline check", "check", checkName)
 
+	startTime := metav1.Now()
+	timeoutSec := int32(timeout.Seconds())
+	var execMsg string
+	var execDetails []string
+	defer func() {
+		completedTime := metav1.Now()
+		result.Execution.StartedAt = &startTime
+		result.Execution.CompletedAt = &completedTime
+		result.Execution.TimeoutSeconds = timeoutSec
+		result.Execution.Message = execMsg
+		result.Execution.Details = execDetails
+	}()
+
 	if r.DvoClientBuilder == nil {
+		execMsg = "DvoClientBuilder is not configured"
 		return withDesc(errorResult(checkName, "DvoClientBuilder is not configured — redeploy the operator to fix this"), descPodDisruptionBudgets)
 	}
 
@@ -821,20 +1030,26 @@ func (r *ReconcileUpgradePreflightCheck) checkPodDisruptionBudgets(
 	checkCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	if checkCtx.Err() != nil {
+		execMsg = "context done before check could start"
 		return withDesc(errorResult(checkName, fmt.Sprintf("context done before check could start: %v", checkCtx.Err())), descPodDisruptionBudgets)
 	}
 
 	metricsClient, err := r.MetricsClientBuilder.NewClient(r.Client)
 	if err != nil {
+		execMsg = "unable to build metrics client"
 		return withDesc(errorResult(checkName, fmt.Sprintf("Baseline check: unable to build metrics client: %v", err)), descPodDisruptionBudgets)
 	}
+
+	execDetails = []string{"Uses MUO's upgrade validation logic (upgraders.HealthCheckPDB)"}
 
 	fakeUC := createFakeUpgradeConfig("4.15.0")
 	_, passed, err := upgraders.HealthCheckPDB(metricsClient, r.Client, r.DvoClientBuilder, fakeUC, logger, fakeUC.Spec.Desired.Version)
 	if err != nil {
+		execMsg = "PodDisruptionBudget check failed"
 		return withDesc(errorResult(checkName, fmt.Sprintf("PodDisruptionBudget check failed: %v", err)), descPodDisruptionBudgets)
 	}
 	if !passed {
+		execMsg = "Upgrade validation failed: blocking PDBs or invalid PDB configuration detected"
 		return withDesc(completedResult(checkName, upgradev1alpha1.CheckFinding{
 			Verdict: upgradev1alpha1.CheckFailed,
 			Message: "blocking PodDisruptionBudgets or DVO metrics indicate invalid PDB configuration",
@@ -842,6 +1057,7 @@ func (r *ReconcileUpgradePreflightCheck) checkPodDisruptionBudgets(
 	}
 
 	logger.Info("Baseline check passed", "check", checkName)
+	execMsg = "Upgrade validation passed: no blocking PDBs"
 	return withDesc(completedResult(checkName, upgradev1alpha1.CheckFinding{Verdict: upgradev1alpha1.CheckPassed}), descPodDisruptionBudgets)
 }
 
@@ -849,9 +1065,22 @@ func (r *ReconcileUpgradePreflightCheck) checkPodDisruptionBudgetsExtended(
 	ctx context.Context,
 	logger logr.Logger,
 	timeout time.Duration,
-) upgradev1alpha1.PreflightCheckResult {
+) (result upgradev1alpha1.PreflightCheckResult) {
 	const checkName = "PodDisruptionBudgetsExtended"
 	logger.Info("Running check", "check", checkName)
+
+	startTime := metav1.Now()
+	timeoutSec := int32(timeout.Seconds())
+	var execMsg string
+	var execDetails []string
+	defer func() {
+		completedTime := metav1.Now()
+		result.Execution.StartedAt = &startTime
+		result.Execution.CompletedAt = &completedTime
+		result.Execution.TimeoutSeconds = timeoutSec
+		result.Execution.Message = execMsg
+		result.Execution.Details = execDetails
+	}()
 
 	checkCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -859,18 +1088,24 @@ func (r *ReconcileUpgradePreflightCheck) checkPodDisruptionBudgetsExtended(
 	pdbList := &policyv1.PodDisruptionBudgetList{}
 	if err := r.Client.List(checkCtx, pdbList); err != nil {
 		logger.Error(err, "Check error", "check", checkName)
+		execMsg = "unable to list PodDisruptionBudgets"
 		return withDesc(errorResult(checkName, fmt.Sprintf("unable to list PodDisruptionBudgets: %v", err)), descPodDisruptionBudgetsExtended)
 	}
 
 	var bad []string
 	for _, pdb := range pdbList.Items {
 		if reason := pdbViolation(pdb); reason != "" {
-			bad = append(bad, fmt.Sprintf("%s/%s (%s)", pdb.Namespace, pdb.Name, reason))
+			entry := fmt.Sprintf("%s/%s (%s)", pdb.Namespace, pdb.Name, reason)
+			bad = append(bad, entry)
+			execDetails = append(execDetails, fmt.Sprintf("%s: BLOCKING — %s", fmt.Sprintf("%s/%s", pdb.Namespace, pdb.Name), reason))
+		} else {
+			execDetails = append(execDetails, fmt.Sprintf("%s/%s: ok", pdb.Namespace, pdb.Name))
 		}
 	}
 
 	if len(bad) > 0 {
 		logger.Info("Check failed", "check", checkName, "blockingPDBs", bad)
+		execMsg = fmt.Sprintf("%d blocking PDB(s) of %d total", len(bad), len(pdbList.Items))
 		return withDesc(completedResult(checkName, upgradev1alpha1.CheckFinding{
 			Verdict: upgradev1alpha1.CheckFailed,
 			Message: fmt.Sprintf("blocking PodDisruptionBudgets: %s", strings.Join(bad, "; ")),
@@ -879,6 +1114,7 @@ func (r *ReconcileUpgradePreflightCheck) checkPodDisruptionBudgetsExtended(
 	}
 
 	logger.Info("Check passed", "check", checkName)
+	execMsg = fmt.Sprintf("Checked %d PDB(s): none blocking node drains", len(pdbList.Items))
 	return withDesc(completedResult(checkName, upgradev1alpha1.CheckFinding{Verdict: upgradev1alpha1.CheckPassed}), descPodDisruptionBudgetsExtended)
 }
 
@@ -914,9 +1150,22 @@ func (r *ReconcileUpgradePreflightCheck) checkUpgradeableCondition(
 	ctx context.Context,
 	logger logr.Logger,
 	timeout time.Duration,
-) upgradev1alpha1.PreflightCheckResult {
+) (result upgradev1alpha1.PreflightCheckResult) {
 	const checkName = "UpgradeableCondition"
 	logger.Info("Running check", "check", checkName)
+
+	startTime := metav1.Now()
+	timeoutSec := int32(timeout.Seconds())
+	var execMsg string
+	var execDetails []string
+	defer func() {
+		completedTime := metav1.Now()
+		result.Execution.StartedAt = &startTime
+		result.Execution.CompletedAt = &completedTime
+		result.Execution.TimeoutSeconds = timeoutSec
+		result.Execution.Message = execMsg
+		result.Execution.Details = execDetails
+	}()
 
 	_, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -925,12 +1174,18 @@ func (r *ReconcileUpgradePreflightCheck) checkUpgradeableCondition(
 	clusterVersion, err := cvClient.GetClusterVersion()
 	if err != nil {
 		logger.Error(err, "Check error", "check", checkName)
+		execMsg = "unable to read cluster version"
 		return withDesc(errorResult(checkName, fmt.Sprintf("unable to get cluster version: %v", err)), descUpgradeableCondition)
 	}
 
 	for _, condition := range clusterVersion.Status.Conditions {
 		if condition.Type == configv1.OperatorUpgradeable && condition.Status == configv1.ConditionFalse {
 			logger.Info("Check failed", "check", checkName, "reason", condition.Reason, "message", condition.Message)
+			execMsg = fmt.Sprintf("Cluster not upgradeable: %s", condition.Reason)
+			execDetails = []string{
+				fmt.Sprintf("Upgradeable=False: reason=%s", condition.Reason),
+				fmt.Sprintf("message=%s", condition.Message),
+			}
 			return withDesc(completedResult(checkName, upgradev1alpha1.CheckFinding{
 				Verdict: upgradev1alpha1.CheckFailed,
 				Message: fmt.Sprintf("Upgradeable=False: %s", condition.Reason),
@@ -943,6 +1198,8 @@ func (r *ReconcileUpgradePreflightCheck) checkUpgradeableCondition(
 	}
 
 	logger.Info("Check passed", "check", checkName)
+	execMsg = "Cluster is upgradeable"
+	execDetails = []string{"Upgradeable condition is True (or not set)"}
 	return withDesc(completedResult(checkName, upgradev1alpha1.CheckFinding{Verdict: upgradev1alpha1.CheckPassed}), descUpgradeableCondition)
 }
 
@@ -951,13 +1208,28 @@ func (r *ReconcileUpgradePreflightCheck) checkPullSecretValid(
 	ctx context.Context,
 	logger logr.Logger,
 	timeout time.Duration,
-) upgradev1alpha1.PreflightCheckResult {
+) (result upgradev1alpha1.PreflightCheckResult) {
 	const checkName = "PullSecretValid"
 	logger.Info("Running check", "check", checkName)
+
+	startTime := metav1.Now()
+	timeoutSec := int32(timeout.Seconds())
+	var execMsg string
+	var execDetails []string
+	defer func() {
+		completedTime := metav1.Now()
+		result.Execution.StartedAt = &startTime
+		result.Execution.CompletedAt = &completedTime
+		result.Execution.TimeoutSeconds = timeoutSec
+		result.Execution.Message = execMsg
+		result.Execution.Details = execDetails
+	}()
 
 	_, err := util.GetAccessToken(r.Client)
 	if err != nil {
 		logger.Info("Check failed", "check", checkName, "error", err.Error())
+		execMsg = "pull secret validation failed"
+		execDetails = []string{err.Error()}
 		return withDesc(completedResult(checkName, upgradev1alpha1.CheckFinding{
 			Verdict: upgradev1alpha1.CheckFailed,
 			Message: fmt.Sprintf("pull secret validation failed: %v", err),
@@ -966,6 +1238,8 @@ func (r *ReconcileUpgradePreflightCheck) checkPullSecretValid(
 	}
 
 	logger.Info("Check passed", "check", checkName)
+	execMsg = "Pull secret is valid"
+	execDetails = []string{"cloud.openshift.com auth entry is present in the cluster pull secret"}
 	return withDesc(completedResult(checkName, upgradev1alpha1.CheckFinding{Verdict: upgradev1alpha1.CheckPassed}), descPullSecretValid)
 }
 
@@ -976,9 +1250,22 @@ func (r *ReconcileUpgradePreflightCheck) checkAdminAcks(
 	instance *upgradev1alpha1.UpgradePreflightCheck,
 	logger logr.Logger,
 	timeout time.Duration,
-) upgradev1alpha1.PreflightCheckResult {
+) (result upgradev1alpha1.PreflightCheckResult) {
 	const checkName = "AdminAcks"
 	logger.Info("Running check", "check", checkName)
+
+	startTime := metav1.Now()
+	timeoutSec := int32(timeout.Seconds())
+	var execMsg string
+	var execDetails []string
+	defer func() {
+		completedTime := metav1.Now()
+		result.Execution.StartedAt = &startTime
+		result.Execution.CompletedAt = &completedTime
+		result.Execution.TimeoutSeconds = timeoutSec
+		result.Execution.Message = execMsg
+		result.Execution.Details = execDetails
+	}()
 
 	checkCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -996,6 +1283,8 @@ func (r *ReconcileUpgradePreflightCheck) checkAdminAcks(
 		if apierrors.IsNotFound(err) {
 			if isYStream {
 				logger.Info("Check failed", "check", checkName, "reason", "admin-acks ConfigMap not found for y-stream upgrade")
+				execMsg = "admin-acks ConfigMap not found — required for y-stream upgrades"
+				execDetails = []string{"ConfigMap openshift-config/admin-acks does not exist"}
 				return withDesc(completedResult(checkName, upgradev1alpha1.CheckFinding{
 					Verdict: upgradev1alpha1.CheckFailed,
 					Message: "admin-acks ConfigMap not found in openshift-config — required for y-stream upgrades",
@@ -1003,12 +1292,15 @@ func (r *ReconcileUpgradePreflightCheck) checkAdminAcks(
 				}), descAdminAcks)
 			}
 			logger.Info("Check passed", "check", checkName, "note", "admin-acks ConfigMap not found (z-stream, not required)")
+			execMsg = "Admin acks not required for z-stream upgrade"
+			execDetails = []string{"ConfigMap openshift-config/admin-acks does not exist (not required for z-stream)"}
 			return withDesc(completedResult(checkName, upgradev1alpha1.CheckFinding{
 				Verdict: upgradev1alpha1.CheckPassed,
 				Details: []string{"admin-acks ConfigMap not found (not required for z-stream)"},
 			}), descAdminAcks)
 		}
 		logger.Error(err, "Check error", "check", checkName)
+		execMsg = "unable to read admin-acks ConfigMap"
 		return withDesc(errorResult(checkName, fmt.Sprintf("unable to read admin-acks ConfigMap: %v", err)), descAdminAcks)
 	}
 
@@ -1019,6 +1311,8 @@ func (r *ReconcileUpgradePreflightCheck) checkAdminAcks(
 
 	if isYStream && len(cm.Data) == 0 {
 		logger.Info("Check failed", "check", checkName, "reason", "admin-acks ConfigMap is empty for y-stream upgrade")
+		execMsg = "admin-acks ConfigMap exists but has no entries"
+		execDetails = []string{"ConfigMap openshift-config/admin-acks has no data entries"}
 		return withDesc(completedResult(checkName, upgradev1alpha1.CheckFinding{
 			Verdict: upgradev1alpha1.CheckFailed,
 			Message: "admin-acks ConfigMap exists but has no entries — y-stream upgrades typically require acknowledgements",
@@ -1027,6 +1321,8 @@ func (r *ReconcileUpgradePreflightCheck) checkAdminAcks(
 	}
 
 	logger.Info("Check passed", "check", checkName, "ackCount", len(ackKeys))
+	execMsg = fmt.Sprintf("Admin acks present: %d entry/entries in openshift-config/admin-acks", len(ackKeys))
+	execDetails = ackKeys
 	return withDesc(completedResult(checkName, upgradev1alpha1.CheckFinding{
 		Verdict: upgradev1alpha1.CheckPassed,
 		Details: ackKeys,
