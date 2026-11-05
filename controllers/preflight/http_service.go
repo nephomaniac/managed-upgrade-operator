@@ -441,7 +441,7 @@ func (s *PreflightHTTPServer) buildInternalCR(requestID string, req CheckRequest
 	}
 	return &upgradev1alpha1.UpgradePreflightCheck{
 		ObjectMeta: metav1.ObjectMeta{
-			GenerateName: "http-",
+			GenerateName: "upgradecheck-",
 			Namespace:    s.Namespace,
 			Labels:       map[string]string{requestIDLabel: requestID},
 			Annotations:  annotations,
