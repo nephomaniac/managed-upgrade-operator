@@ -238,6 +238,7 @@ func main() {
 		CvClientBuilder:      cv.NewBuilder(),
 		Machinery:            machinery.NewMachinery(),
 		ConfigManagerBuilder: configmanager.NewBuilder(),
+		DvoClientBuilder:     dvo.NewBuilder(),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err,
 			"UpgradePreflightCheck controller failed to start — on-demand preflight checks will be unavailable. "+

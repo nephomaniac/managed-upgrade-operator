@@ -9,6 +9,7 @@ import (
 	upgradev1alpha1 "github.com/openshift/managed-upgrade-operator/api/v1alpha1"
 	cvMocks "github.com/openshift/managed-upgrade-operator/pkg/clusterversion/mocks"
 	configMocks "github.com/openshift/managed-upgrade-operator/pkg/configmanager/mocks"
+	dvoMocks "github.com/openshift/managed-upgrade-operator/pkg/dvo/mocks"
 	machineryMocks "github.com/openshift/managed-upgrade-operator/pkg/machinery/mocks"
 	"github.com/openshift/managed-upgrade-operator/pkg/metrics"
 	metricsMocks "github.com/openshift/managed-upgrade-operator/pkg/metrics/mocks"
@@ -42,6 +43,8 @@ var _ = Describe("PreflightController", func() {
 		mockMetricsBuilder    *metricsMocks.MockMetricsBuilder
 		mockMetrics           *metricsMocks.MockMetrics
 		mockMachinery         *machineryMocks.MockMachinery
+		mockDvoClientBuilder  *dvoMocks.MockDvoClientBuilder
+		mockDvoClient         *dvoMocks.MockDvoClient
 
 		reconciler *ReconcileUpgradePreflightCheck
 		req        reconcile.Request
@@ -59,6 +62,8 @@ var _ = Describe("PreflightController", func() {
 		mockMetricsBuilder = metricsMocks.NewMockMetricsBuilder(mockCtrl)
 		mockMetrics = metricsMocks.NewMockMetrics(mockCtrl)
 		mockMachinery = machineryMocks.NewMockMachinery(mockCtrl)
+		mockDvoClientBuilder = dvoMocks.NewMockDvoClientBuilder(mockCtrl)
+		mockDvoClient = dvoMocks.NewMockDvoClient(mockCtrl)
 
 		reconciler = &ReconcileUpgradePreflightCheck{
 			Client:               mockClient,
@@ -66,6 +71,7 @@ var _ = Describe("PreflightController", func() {
 			CvClientBuilder:      mockCvBuilder,
 			Machinery:            mockMachinery,
 			ConfigManagerBuilder: mockConfigMgrBuilder,
+			DvoClientBuilder:     mockDvoClientBuilder,
 		}
 
 		req = reconcile.Request{
@@ -185,17 +191,21 @@ var _ = Describe("PreflightController", func() {
 				mockCvBuilder.EXPECT().New(gomock.Any()).Return(mockCv).AnyTimes()
 				mockCv.EXPECT().GetClusterVersion().Return(&configv1.ClusterVersion{}, nil).Times(2) // ClusterVersion + UpgradeableCondition
 				mockCv.EXPECT().HasDegradedOperators().Return(&clusterversion.HasDegradedOperatorsResult{}, nil).Times(2) // baseline CO + extended CO
-				// 5 NewClient calls: baseline CO, baseline CA, extended CA, baseline MCN, baseline NT
-				mockMetricsBuilder.EXPECT().NewClient(gomock.Any()).Return(mockMetrics, nil).Times(5)
+				// 6 NewClient calls: baseline CO, baseline CA, extended CA, baseline MCN, baseline NT, baseline PDB
+				mockMetricsBuilder.EXPECT().NewClient(gomock.Any()).Return(mockMetrics, nil).Times(6)
 				mockMetrics.EXPECT().Query(gomock.Any()).Return(&metrics.AlertResponse{}, nil).Times(2) // extended CA + baseline CA
-				// metric update calls from upgraders functions (baseline CO, CA, MCN, NT on success)
+				// metric update calls from upgraders functions (baseline CO, CA, MCN, NT, PDB on success)
 				mockMetrics.EXPECT().UpdateMetricHealthcheckSucceeded(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).AnyTimes()
 				mockMetrics.EXPECT().UpdateMetricHealthcheckFailed(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).AnyTimes()
 				// node list: 2 extended (MCN + NT) + 2 baseline (MCN + NT via upgraders)
 				mockClient.EXPECT().List(gomock.Any(), gomock.AssignableToTypeOf(&corev1.NodeList{}), gomock.Any()).
 					Return(nil).Times(4)
+				// PDB list: 1 extended + 1 baseline (via upgraders.HealthCheckPDB)
 				mockClient.EXPECT().List(gomock.Any(), gomock.AssignableToTypeOf(&policyv1.PodDisruptionBudgetList{}), gomock.Any()).
-					Return(nil)
+					Return(nil).Times(2)
+				// baseline PDB DVO check
+				mockDvoClientBuilder.EXPECT().New(gomock.Any()).Return(mockDvoClient, nil)
+				mockDvoClient.EXPECT().GetMetrics().Return([]byte(""), nil)
 				// PullSecretValid: GetAccessToken reads ClusterVersion + pull-secret Secret
 				mockClient.EXPECT().Get(gomock.Any(), types.NamespacedName{Name: "version"}, gomock.AssignableToTypeOf(&configv1.ClusterVersion{})).
 					Return(nil)
@@ -615,6 +625,44 @@ var _ = Describe("PreflightController", func() {
 				mockClient.EXPECT().List(gomock.Any(), gomock.AssignableToTypeOf(&corev1.NodeList{}), gomock.Any()).
 					Return(fmt.Errorf("list nodes failed"))
 				result := reconciler.checkNodeTaintsExtended(context.TODO(), log, defaultCheckTimeout)
+				Expect(result.Execution.State).To(Equal(upgradev1alpha1.CheckError))
+			})
+		})
+
+		Context("checkPodDisruptionBudgets", func() {
+			It("returns Passed when no blocking PDBs and DVO metrics are clean", func() {
+				mockMetricsBuilder.EXPECT().NewClient(gomock.Any()).Return(mockMetrics, nil)
+				mockMetrics.EXPECT().UpdateMetricHealthcheckSucceeded(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).AnyTimes()
+				mockClient.EXPECT().List(gomock.Any(), gomock.AssignableToTypeOf(&policyv1.PodDisruptionBudgetList{}), gomock.Any()).
+					Return(nil)
+				mockDvoClientBuilder.EXPECT().New(gomock.Any()).Return(mockDvoClient, nil)
+				mockDvoClient.EXPECT().GetMetrics().Return([]byte(""), nil)
+				result := reconciler.checkPodDisruptionBudgets(context.TODO(), log, defaultCheckTimeout)
+				Expect(result.Execution.State).To(Equal(upgradev1alpha1.CheckCompleted))
+				Expect(result.Result.Verdict).To(Equal(upgradev1alpha1.CheckPassed))
+			})
+
+			It("returns Error when metrics client cannot be built", func() {
+				mockMetricsBuilder.EXPECT().NewClient(gomock.Any()).Return(nil, fmt.Errorf("metrics unavailable"))
+				result := reconciler.checkPodDisruptionBudgets(context.TODO(), log, defaultCheckTimeout)
+				Expect(result.Execution.State).To(Equal(upgradev1alpha1.CheckError))
+			})
+
+			It("returns Error when PDB list fails", func() {
+				mockMetricsBuilder.EXPECT().NewClient(gomock.Any()).Return(mockMetrics, nil)
+				mockClient.EXPECT().List(gomock.Any(), gomock.AssignableToTypeOf(&policyv1.PodDisruptionBudgetList{}), gomock.Any()).
+					Return(fmt.Errorf("pdb list failed"))
+				result := reconciler.checkPodDisruptionBudgets(context.TODO(), log, defaultCheckTimeout)
+				Expect(result.Execution.State).To(Equal(upgradev1alpha1.CheckError))
+			})
+
+			It("returns Error when DVO client cannot be created", func() {
+				mockMetricsBuilder.EXPECT().NewClient(gomock.Any()).Return(mockMetrics, nil)
+				mockMetrics.EXPECT().UpdateMetricHealthcheckFailed(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).AnyTimes()
+				mockClient.EXPECT().List(gomock.Any(), gomock.AssignableToTypeOf(&policyv1.PodDisruptionBudgetList{}), gomock.Any()).
+					Return(nil)
+				mockDvoClientBuilder.EXPECT().New(gomock.Any()).Return(nil, fmt.Errorf("dvo unavailable"))
+				result := reconciler.checkPodDisruptionBudgets(context.TODO(), log, defaultCheckTimeout)
 				Expect(result.Execution.State).To(Equal(upgradev1alpha1.CheckError))
 			})
 		})

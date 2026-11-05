@@ -12,6 +12,7 @@ import (
 	muocfg "github.com/openshift/managed-upgrade-operator/config"
 	cv "github.com/openshift/managed-upgrade-operator/pkg/clusterversion"
 	"github.com/openshift/managed-upgrade-operator/pkg/configmanager"
+	"github.com/openshift/managed-upgrade-operator/pkg/dvo"
 	"github.com/openshift/managed-upgrade-operator/pkg/machinery"
 	"github.com/openshift/managed-upgrade-operator/pkg/metrics"
 	"github.com/openshift/managed-upgrade-operator/pkg/upgraders"
@@ -48,6 +49,7 @@ var allChecks = []string{
 	"ClusterOperatorsExtended",     // Comprehensive: checks all degraded operators
 	"CriticalAlerts",               // Baseline: calls upgraders.CriticalAlertsDefault()
 	"CriticalAlertsExtended",       // Comprehensive: direct Prometheus query with retry
+	"PodDisruptionBudgets",         // Baseline: calls upgraders.HealthCheckPDB() (includes DVO metrics)
 	"PodDisruptionBudgetsExtended", // Comprehensive: cluster-wide PDB drain-block detection
 	"ManuallyCordonedNodes",        // Baseline: calls upgraders.ManuallyCordonedNodes()
 	"ManuallyCordonedNodesExtended", // Comprehensive: all cordoned worker nodes
@@ -89,6 +91,7 @@ type ReconcileUpgradePreflightCheck struct {
 	CvClientBuilder      cv.ClusterVersionBuilder
 	Machinery            machinery.Machinery
 	ConfigManagerBuilder configmanager.ConfigManagerBuilder
+	DvoClientBuilder     dvo.DvoClientBuilder
 }
 
 func (r *ReconcileUpgradePreflightCheck) Reconcile(ctx context.Context, req reconcile.Request) (result reconcile.Result, err error) {
@@ -186,6 +189,9 @@ func (r *ReconcileUpgradePreflightCheck) runChecks(
 		},
 		"CriticalAlertsExtended": func() upgradev1alpha1.PreflightCheckResult {
 			return r.checkCriticalAlertsExtended(ctx, logger, timeout)
+		},
+		"PodDisruptionBudgets": func() upgradev1alpha1.PreflightCheckResult {
+			return r.checkPodDisruptionBudgets(ctx, logger, timeout)
 		},
 		"PodDisruptionBudgetsExtended": func() upgradev1alpha1.PreflightCheckResult {
 			return r.checkPodDisruptionBudgetsExtended(ctx, logger, timeout)
@@ -703,8 +709,35 @@ func (r *ReconcileUpgradePreflightCheck) checkNodeTaintsExtended(
 }
 
 // checkPodDisruptionBudgetsExtended checks for PDBs that would block node drains.
-// PodDisruptionBudgets baseline wrapper is omitted: upgraders.HealthCheckPDB() requires a
-// DvoClientBuilder which is not available in the preflight reconciler struct.
+func (r *ReconcileUpgradePreflightCheck) checkPodDisruptionBudgets(
+	ctx context.Context,
+	logger logr.Logger,
+	timeout time.Duration,
+) upgradev1alpha1.PreflightCheckResult {
+	const checkName = "PodDisruptionBudgets"
+	logger.Info("Running baseline check", "check", checkName)
+
+	metricsClient, err := r.MetricsClientBuilder.NewClient(r.Client)
+	if err != nil {
+		return errorResult(checkName, fmt.Sprintf("unable to build metrics client: %v", err))
+	}
+
+	fakeUC := createFakeUpgradeConfig("4.15.0")
+	_, passed, err := upgraders.HealthCheckPDB(metricsClient, r.Client, r.DvoClientBuilder, fakeUC, logger, fakeUC.Spec.Desired.Version)
+	if err != nil {
+		return errorResult(checkName, fmt.Sprintf("PodDisruptionBudget check failed: %v", err))
+	}
+	if !passed {
+		return completedResult(checkName, upgradev1alpha1.CheckFinding{
+			Verdict: upgradev1alpha1.CheckFailed,
+			Message: "blocking PodDisruptionBudgets or DVO metrics indicate invalid PDB configuration",
+		})
+	}
+
+	logger.Info("Baseline check passed", "check", checkName)
+	return completedResult(checkName, upgradev1alpha1.CheckFinding{Verdict: upgradev1alpha1.CheckPassed})
+}
+
 func (r *ReconcileUpgradePreflightCheck) checkPodDisruptionBudgetsExtended(
 	ctx context.Context,
 	logger logr.Logger,
