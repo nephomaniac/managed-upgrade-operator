@@ -37,6 +37,17 @@ const (
 	CheckSkipped CheckExecutionState = "Skipped"
 )
 
+// CheckOwner identifies who is responsible for resolving a failed or errored check.
+// +kubebuilder:validation:Enum={"customer","service-team"}
+type CheckOwner string
+
+const (
+	// OwnerCustomer means the customer must take action to resolve this check.
+	OwnerCustomer CheckOwner = "customer"
+	// OwnerServiceTeam means the Red Hat service team must investigate.
+	OwnerServiceTeam CheckOwner = "service-team"
+)
+
 // CheckResult is the top-level health verdict for a preflight check.
 // +kubebuilder:validation:Enum={"Passed","Failed","Error","Skipped","Unknown"}
 type CheckResult string
@@ -101,6 +112,16 @@ type PreflightCheckResult struct {
 	// Result is the health verdict: Passed, Failed, Error, Skipped, or Unknown.
 	// This is the top-level signal — no need to inspect Execution to determine check outcome.
 	Result CheckResult `json:"result"`
+
+	// Owner identifies who is responsible for resolving this check when it fails or errors.
+	// "customer" means the customer must act; "service-team" means Red Hat must investigate.
+	// +kubebuilder:validation:Optional
+	Owner CheckOwner `json:"owner,omitempty"`
+
+	// Action is the recommended next step when Result is Failed or Error.
+	// Empty when the check passed or was skipped.
+	// +kubebuilder:validation:Optional
+	Action string `json:"action,omitempty"`
 
 	// TimeoutSeconds is the timeout that was applied to this check.
 	TimeoutSeconds int32 `json:"timeoutSeconds"`

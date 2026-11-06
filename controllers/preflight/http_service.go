@@ -74,6 +74,8 @@ type CheckResponse struct {
 type CheckResult struct {
 	Name    string   `json:"name"`
 	Status  string   `json:"status"`
+	Owner   string   `json:"owner,omitempty"`
+	Action  string   `json:"action,omitempty"`
 	Message string   `json:"message,omitempty"`
 	Details []string `json:"details,omitempty"`
 }
@@ -502,7 +504,7 @@ func buildResponse(requestID string, cr *upgradev1alpha1.UpgradePreflightCheck) 
 
 	anyBad := false
 	for _, c := range cr.Status.Checks {
-		r := CheckResult{Name: c.Name}
+		r := CheckResult{Name: c.Name, Owner: string(c.Owner), Action: c.Action}
 		switch c.Execution.State {
 		case upgradev1alpha1.CheckCompleted:
 			resp.ChecksCompleted++

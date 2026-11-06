@@ -228,7 +228,7 @@ var _ = Describe("PreflightController", func() {
 
 				// check calls (all checks enabled)
 				mockCvBuilder.EXPECT().New(gomock.Any()).Return(mockCv).AnyTimes()
-				mockCv.EXPECT().GetClusterVersion().Return(&configv1.ClusterVersion{}, nil).Times(2) // ClusterVersion + UpgradeableCondition
+				mockCv.EXPECT().GetClusterVersion().Return(&configv1.ClusterVersion{}, nil).Times(3) // ClusterVersion + UpgradeInFlight + UpgradeableCondition
 				mockClient.EXPECT().List(gomock.Any(), gomock.AssignableToTypeOf(&configv1.ClusterOperatorList{}), gomock.Any()).Return(nil) // extended CO operator list
 				mockCv.EXPECT().HasDegradedOperators().Return(&clusterversion.HasDegradedOperatorsResult{}, nil).Times(2) // baseline CO + extended CO
 				// 6 NewClient calls: baseline CO, baseline CA, extended CA, baseline MCN, baseline NT, baseline PDB
@@ -455,6 +455,47 @@ var _ = Describe("PreflightController", func() {
 				mockCvBuilder.EXPECT().New(gomock.Any()).Return(mockCv)
 				mockCv.EXPECT().GetClusterVersion().Return(nil, fmt.Errorf("cvo unavailable"))
 				result := reconciler.checkClusterVersion(context.TODO(), log, defaultCheckTimeout)
+				Expect(result.Execution.State).To(Equal(upgradev1alpha1.CheckError))
+				Expect(result.Execution.Error).To(ContainSubstring("cvo unavailable"))
+			})
+		})
+
+		Context("checkUpgradeInFlight", func() {
+			It("returns Passed when no upgrade is in progress", func() {
+				mockCvBuilder.EXPECT().New(gomock.Any()).Return(mockCv)
+				mockCv.EXPECT().GetClusterVersion().Return(&configv1.ClusterVersion{
+					Status: configv1.ClusterVersionStatus{
+						Conditions: []configv1.ClusterOperatorStatusCondition{
+							{Type: configv1.OperatorProgressing, Status: configv1.ConditionFalse, Message: "Cluster version is 4.16.10"},
+						},
+					},
+				}, nil)
+				result := reconciler.checkUpgradeInFlight(context.TODO(), log, defaultCheckTimeout)
+				Expect(result.Execution.State).To(Equal(upgradev1alpha1.CheckCompleted))
+				Expect(result.Result).To(Equal(upgradev1alpha1.CheckPassed))
+			})
+
+			It("returns Failed when an upgrade is in progress", func() {
+				mockCvBuilder.EXPECT().New(gomock.Any()).Return(mockCv)
+				mockCv.EXPECT().GetClusterVersion().Return(&configv1.ClusterVersion{
+					Status: configv1.ClusterVersionStatus{
+						Conditions: []configv1.ClusterOperatorStatusCondition{
+							{Type: configv1.OperatorProgressing, Status: configv1.ConditionTrue, Message: "Working towards 4.17.0"},
+						},
+					},
+				}, nil)
+				result := reconciler.checkUpgradeInFlight(context.TODO(), log, defaultCheckTimeout)
+				Expect(result.Execution.State).To(Equal(upgradev1alpha1.CheckCompleted))
+				Expect(result.Result).To(Equal(upgradev1alpha1.CheckFailed))
+				Expect(result.Execution.Summary).To(ContainSubstring("4.17.0"))
+				Expect(result.Owner).To(Equal(upgradev1alpha1.OwnerServiceTeam))
+				Expect(result.Action).NotTo(BeEmpty())
+			})
+
+			It("returns Error when GetClusterVersion fails", func() {
+				mockCvBuilder.EXPECT().New(gomock.Any()).Return(mockCv)
+				mockCv.EXPECT().GetClusterVersion().Return(nil, fmt.Errorf("cvo unavailable"))
+				result := reconciler.checkUpgradeInFlight(context.TODO(), log, defaultCheckTimeout)
 				Expect(result.Execution.State).To(Equal(upgradev1alpha1.CheckError))
 				Expect(result.Execution.Error).To(ContainSubstring("cvo unavailable"))
 			})

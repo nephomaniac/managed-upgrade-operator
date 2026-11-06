@@ -58,11 +58,28 @@ const (
 	descClusterOperatorsExtended = "Comprehensive cluster operator health check. Lists all operators with available/degraded conditions and detailed status messages."
 	descCriticalAlertsExtended   = "Detailed critical alert analysis without ignore filters. Lists all firing critical alerts in core OpenShift namespaces (openshift-*, kube-*, default)."
 	descNodeHealthExtended       = "In-depth node health analysis. Shows all worker nodes that are cordoned or have memory, disk, or PID pressure conditions that could block workload scheduling."
-	descPDBMasterInfra = "Identifies PodDisruptionBudgets that could block master or infra node drain during an upgrade. Scans two sources: (1) pods currently running on master/infra nodes, and (2) DaemonSet pod templates that tolerate master/infra taints and will always be present on those nodes. Only flags PDBs that are restrictive (MaxUnavailable=0 or MinAvailable=100%) and are confirmed to cover workloads on those nodes."
+	descUpgradeInFlight = "Checks whether a cluster version upgrade is currently in progress by inspecting the ClusterVersion Progressing condition. Starting a new upgrade while one is already in-flight can cause conflicts and unpredictable behaviour."
+	descPDBMasterInfra  = "Identifies PodDisruptionBudgets that could block master or infra node drain during an upgrade. Scans two sources: (1) pods currently running on master/infra nodes, and (2) DaemonSet pod templates that tolerate master/infra taints and will always be present on those nodes. Only flags PDBs that are restrictive (MaxUnavailable=0 or MinAvailable=100%) and are confirmed to cover workloads on those nodes."
 )
+
+// ocmOnlyChecks lists checks that require OCM API access and therefore cannot run
+// inside MUO. These should be implemented in an external OCM-side eligibility layer
+// (e.g. ROSA CLI, OCM tooling). Documented here so they are not mistakenly re-implemented
+// in-cluster without the necessary OCM client support.
+//
+//   - LIMITED_SUPPORT: Whether the cluster is in Limited Support; OCM-only state.
+//   - NO_TARGETS_AVAILABLE / AT_LATEST_VERSION: ROSA-enabled upgrade graph; OCM owns the
+//     list of ROSA-approved versions. The CVO's availableUpdates field is a partial proxy
+//     but does not reflect ROSA enablement gating.
+//   - TARGET_NOT_AVAILABLE: Whether a requested version exists in the ROSA upgrade graph.
+//   - GATE_UNACKED (OCM-side gates): Version gate agreements are stored in OCM. The
+//     AdminAcks check covers the in-cluster admin-acks ConfigMap; OCM gate agreements
+//     require the OCM API (ListGateAgreements).
+var _ = "ocmOnlyChecks — see comment above"
 
 var allChecks = []string{
 	"ClusterVersion",
+	"UpgradeInFlight",
 	"ClusterOperators",
 	"ClusterOperatorsExtended",
 	"CriticalAlerts",
@@ -225,6 +242,7 @@ func (r *ReconcileUpgradePreflightCheck) runChecks(
 
 	dispatch := map[string]func() upgradev1alpha1.PreflightCheckResult{
 		"ClusterVersion":                  func() upgradev1alpha1.PreflightCheckResult { return r.checkClusterVersion(ctx, logger, timeout) },
+		"UpgradeInFlight":                 func() upgradev1alpha1.PreflightCheckResult { return r.checkUpgradeInFlight(ctx, logger, timeout) },
 		"ClusterOperators":                func() upgradev1alpha1.PreflightCheckResult { return r.checkClusterOperators(ctx, logger, timeout) },
 		"ClusterOperatorsExtended":        func() upgradev1alpha1.PreflightCheckResult { return r.checkClusterOperatorsExtended(ctx, logger, timeout) },
 		"CriticalAlerts":                  func() upgradev1alpha1.PreflightCheckResult { return r.checkCriticalAlerts(ctx, logger, timeout) },
@@ -333,6 +351,16 @@ func withTiming(r upgradev1alpha1.PreflightCheckResult, start, end metav1.Time) 
 	return r
 }
 
+func withOwner(r upgradev1alpha1.PreflightCheckResult, owner upgradev1alpha1.CheckOwner) upgradev1alpha1.PreflightCheckResult {
+	r.Owner = owner
+	return r
+}
+
+func withAction(r upgradev1alpha1.PreflightCheckResult, action string) upgradev1alpha1.PreflightCheckResult {
+	r.Action = action
+	return r
+}
+
 func createFakeUpgradeConfig(targetVersion string) *upgradev1alpha1.UpgradeConfig {
 	return &upgradev1alpha1.UpgradeConfig{
 		ObjectMeta: metav1.ObjectMeta{Name: "preflight-check"},
@@ -356,16 +384,16 @@ func (r *ReconcileUpgradePreflightCheck) checkClusterVersion(
 	cvClient := r.CvClientBuilder.New(r.Client)
 	clusterVersion, err := cvClient.GetClusterVersion()
 	if err != nil {
-		return withTiming(withDesc(errorResult(checkName, fmt.Sprintf("unable to get cluster version: %v", err), timeout), descClusterVersion), start, metav1.Now())
+		return withTiming(withAction(withOwner(withDesc(errorResult(checkName, fmt.Sprintf("unable to get cluster version: %v", err), timeout), descClusterVersion), upgradev1alpha1.OwnerServiceTeam), "Contact Red Hat support if ClusterVersion cannot be queried."), start, metav1.Now())
 	}
 	version := ""
 	if clusterVersion != nil {
 		version = clusterVersion.Status.Desired.Version
 	}
-	return withTiming(withDesc(completedResult(checkName, upgradev1alpha1.CheckPassed,
+	return withTiming(withOwner(withDesc(completedResult(checkName, upgradev1alpha1.CheckPassed,
 		fmt.Sprintf("Cluster version %s", version),
 		[]string{fmt.Sprintf("currentVersion=%s", version)},
-		timeout), descClusterVersion), start, metav1.Now())
+		timeout), descClusterVersion), upgradev1alpha1.OwnerServiceTeam), start, metav1.Now())
 }
 
 func (r *ReconcileUpgradePreflightCheck) checkClusterOperators(
@@ -378,7 +406,7 @@ func (r *ReconcileUpgradePreflightCheck) checkClusterOperators(
 
 	metricsClient, err := r.MetricsClientBuilder.NewClient(r.Client)
 	if err != nil {
-		return withTiming(withDesc(errorResult(checkName, fmt.Sprintf("failed to create metrics client: %v", err), timeout), descClusterOperators), start, metav1.Now())
+		return withTiming(withAction(withOwner(withDesc(errorResult(checkName, fmt.Sprintf("failed to create metrics client: %v", err), timeout), descClusterOperators), upgradev1alpha1.OwnerServiceTeam), "Contact Red Hat support if cluster operator status cannot be determined."), start, metav1.Now())
 	}
 	findings := []string{"Uses MUO's upgrade validation logic (upgraders.ClusterOperators)"}
 	fakeUC := createFakeUpgradeConfig("4.15.0")
@@ -388,11 +416,11 @@ func (r *ReconcileUpgradePreflightCheck) checkClusterOperators(
 		if err != nil {
 			msg = err.Error()
 		}
-		return withTiming(withDesc(completedResult(checkName, upgradev1alpha1.CheckFailed,
-			fmt.Sprintf("Upgrade validation failed: %s", msg), findings, timeout), descClusterOperators), start, metav1.Now())
+		return withTiming(withAction(withOwner(withDesc(completedResult(checkName, upgradev1alpha1.CheckFailed,
+			fmt.Sprintf("Upgrade validation failed: %s", msg), findings, timeout), descClusterOperators), upgradev1alpha1.OwnerCustomer), "Investigate degraded cluster operators: `oc get co`. Check pod logs in the affected operator namespace."), start, metav1.Now())
 	}
-	return withTiming(withDesc(completedResult(checkName, upgradev1alpha1.CheckPassed,
-		"Upgrade validation passed: no degraded operators detected", findings, timeout), descClusterOperators), start, metav1.Now())
+	return withTiming(withOwner(withDesc(completedResult(checkName, upgradev1alpha1.CheckPassed,
+		"Upgrade validation passed: no degraded operators detected", findings, timeout), descClusterOperators), upgradev1alpha1.OwnerCustomer), start, metav1.Now())
 }
 
 func (r *ReconcileUpgradePreflightCheck) checkClusterOperatorsExtended(
@@ -423,18 +451,18 @@ func (r *ReconcileUpgradePreflightCheck) checkClusterOperatorsExtended(
 	cvClient := r.CvClientBuilder.New(r.Client)
 	degraded, err := cvClient.HasDegradedOperators()
 	if err != nil {
-		return withTiming(withDesc(errorResult(checkName, fmt.Sprintf("unable to fetch cluster operator status: %v", err), timeout), descClusterOperatorsExtended), start, metav1.Now())
+		return withTiming(withAction(withOwner(withDesc(errorResult(checkName, fmt.Sprintf("unable to fetch cluster operator status: %v", err), timeout), descClusterOperatorsExtended), upgradev1alpha1.OwnerServiceTeam), "Contact Red Hat support if cluster operator status cannot be listed."), start, metav1.Now())
 	}
 	if len(degraded.Degraded) > 0 {
-		return withTiming(withDesc(completedResult(checkName, upgradev1alpha1.CheckFailed,
+		return withTiming(withAction(withOwner(withDesc(completedResult(checkName, upgradev1alpha1.CheckFailed,
 			fmt.Sprintf("%d degraded operator(s): %s", len(degraded.Degraded), strings.Join(degraded.Degraded, ", ")),
-			degraded.Degraded, timeout), descClusterOperatorsExtended), start, metav1.Now())
+			degraded.Degraded, timeout), descClusterOperatorsExtended), upgradev1alpha1.OwnerCustomer), "Investigate the listed degraded operators. Check pod logs and events in their namespaces."), start, metav1.Now())
 	}
 	summary := "No degraded operators detected"
 	if len(coList.Items) > 0 {
 		summary = fmt.Sprintf("All %d cluster operators healthy", len(coList.Items))
 	}
-	return withTiming(withDesc(completedResult(checkName, upgradev1alpha1.CheckPassed, summary, findings, timeout), descClusterOperatorsExtended), start, metav1.Now())
+	return withTiming(withOwner(withDesc(completedResult(checkName, upgradev1alpha1.CheckPassed, summary, findings, timeout), descClusterOperatorsExtended), upgradev1alpha1.OwnerCustomer), start, metav1.Now())
 }
 
 func (r *ReconcileUpgradePreflightCheck) checkCriticalAlerts(
@@ -447,7 +475,7 @@ func (r *ReconcileUpgradePreflightCheck) checkCriticalAlerts(
 
 	metricsClient, err := r.MetricsClientBuilder.NewClient(r.Client)
 	if err != nil {
-		return withTiming(withDesc(errorResult(checkName, fmt.Sprintf("failed to create metrics client: %v", err), timeout), descCriticalAlerts), start, metav1.Now())
+		return withTiming(withAction(withOwner(withDesc(errorResult(checkName, fmt.Sprintf("failed to create metrics client: %v", err), timeout), descCriticalAlerts), upgradev1alpha1.OwnerServiceTeam), "Contact Red Hat support if Prometheus metrics cannot be queried."), start, metav1.Now())
 	}
 	findings := []string{"Uses MUO's upgrade validation logic (upgraders.CriticalAlertsDefault)"}
 	fakeUC := createFakeUpgradeConfig("4.15.0")
@@ -457,11 +485,11 @@ func (r *ReconcileUpgradePreflightCheck) checkCriticalAlerts(
 		if err != nil {
 			msg = err.Error()
 		}
-		return withTiming(withDesc(completedResult(checkName, upgradev1alpha1.CheckFailed,
-			fmt.Sprintf("Upgrade validation failed: %s", msg), findings, timeout), descCriticalAlerts), start, metav1.Now())
+		return withTiming(withAction(withOwner(withDesc(completedResult(checkName, upgradev1alpha1.CheckFailed,
+			fmt.Sprintf("Upgrade validation failed: %s", msg), findings, timeout), descCriticalAlerts), upgradev1alpha1.OwnerCustomer), "Resolve the firing critical alerts before attempting an upgrade."), start, metav1.Now())
 	}
-	return withTiming(withDesc(completedResult(checkName, upgradev1alpha1.CheckPassed,
-		"Upgrade validation passed: no critical alerts firing", findings, timeout), descCriticalAlerts), start, metav1.Now())
+	return withTiming(withOwner(withDesc(completedResult(checkName, upgradev1alpha1.CheckPassed,
+		"Upgrade validation passed: no critical alerts firing", findings, timeout), descCriticalAlerts), upgradev1alpha1.OwnerCustomer), start, metav1.Now())
 }
 
 func (r *ReconcileUpgradePreflightCheck) checkCriticalAlertsExtended(
@@ -483,7 +511,7 @@ func (r *ReconcileUpgradePreflightCheck) checkCriticalAlertsExtended(
 			if attempt < prometheusRetries {
 				select {
 				case <-checkCtx.Done():
-					return withTiming(withDesc(errorResult(checkName, fmt.Sprintf("timed out waiting for metrics client: %v", err), timeout), descCriticalAlertsExtended), start, metav1.Now())
+					return withTiming(withAction(withOwner(withDesc(errorResult(checkName, fmt.Sprintf("timed out waiting for metrics client: %v", err), timeout), descCriticalAlertsExtended), upgradev1alpha1.OwnerServiceTeam), "Contact Red Hat support if Prometheus cannot be reached."), start, metav1.Now())
 				case <-time.After(prometheusRetryBase * time.Duration(attempt)):
 				}
 			}
@@ -494,7 +522,7 @@ func (r *ReconcileUpgradePreflightCheck) checkCriticalAlertsExtended(
 			if attempt < prometheusRetries {
 				select {
 				case <-checkCtx.Done():
-					return withTiming(withDesc(errorResult(checkName, fmt.Sprintf("timed out querying Prometheus: %v", err), timeout), descCriticalAlertsExtended), start, metav1.Now())
+					return withTiming(withAction(withOwner(withDesc(errorResult(checkName, fmt.Sprintf("timed out querying Prometheus: %v", err), timeout), descCriticalAlertsExtended), upgradev1alpha1.OwnerServiceTeam), "Contact Red Hat support if Prometheus cannot be reached."), start, metav1.Now())
 				case <-time.After(prometheusRetryBase * time.Duration(attempt)):
 				}
 			}
@@ -503,13 +531,13 @@ func (r *ReconcileUpgradePreflightCheck) checkCriticalAlertsExtended(
 		break
 	}
 	if err != nil {
-		return withTiming(withDesc(errorResult(checkName, fmt.Sprintf("unable to query critical alerts after %d attempts: %v", prometheusRetries, err), timeout), descCriticalAlertsExtended), start, metav1.Now())
+		return withTiming(withAction(withOwner(withDesc(errorResult(checkName, fmt.Sprintf("unable to query critical alerts after %d attempts: %v", prometheusRetries, err), timeout), descCriticalAlertsExtended), upgradev1alpha1.OwnerServiceTeam), "Contact Red Hat support if Prometheus metrics cannot be queried."), start, metav1.Now())
 	}
 	if len(alerts.Data.Result) == 0 {
-		return withTiming(withDesc(completedResult(checkName, upgradev1alpha1.CheckPassed,
+		return withTiming(withOwner(withDesc(completedResult(checkName, upgradev1alpha1.CheckPassed,
 			"No critical alerts firing in core namespaces",
 			[]string{"No firing critical alerts in openshift-*, kube-*, or default namespaces"},
-			timeout), descCriticalAlertsExtended), start, metav1.Now())
+			timeout), descCriticalAlertsExtended), upgradev1alpha1.OwnerCustomer), start, metav1.Now())
 	}
 	seen := make(map[string]bool)
 	var names []string
@@ -520,9 +548,9 @@ func (r *ReconcileUpgradePreflightCheck) checkCriticalAlertsExtended(
 			names = append(names, name)
 		}
 	}
-	return withTiming(withDesc(completedResult(checkName, upgradev1alpha1.CheckFailed,
+	return withTiming(withAction(withOwner(withDesc(completedResult(checkName, upgradev1alpha1.CheckFailed,
 		fmt.Sprintf("%d critical alert(s) firing: %s", len(names), strings.Join(names, ", ")),
-		names, timeout), descCriticalAlertsExtended), start, metav1.Now())
+		names, timeout), descCriticalAlertsExtended), upgradev1alpha1.OwnerCustomer), "Investigate and resolve the listed critical alerts before upgrading."), start, metav1.Now())
 }
 
 func (r *ReconcileUpgradePreflightCheck) checkManuallyCordonedNodes(
@@ -535,24 +563,24 @@ func (r *ReconcileUpgradePreflightCheck) checkManuallyCordonedNodes(
 
 	metricsClient, err := r.MetricsClientBuilder.NewClient(r.Client)
 	if err != nil {
-		return withTiming(withDesc(errorResult(checkName, fmt.Sprintf("failed to create metrics client: %v", err), timeout), descNodeHealth), start, metav1.Now())
+		return withTiming(withAction(withOwner(withDesc(errorResult(checkName, fmt.Sprintf("failed to create metrics client: %v", err), timeout), descNodeHealth), upgradev1alpha1.OwnerServiceTeam), "Contact Red Hat support if node status cannot be determined."), start, metav1.Now())
 	}
 	findings := []string{"Uses MUO's upgrade validation logic (upgraders.ManuallyCordonedNodes)"}
 	fakeUC := createFakeUpgradeConfig("4.15.0")
 	cordonedNodes, err := upgraders.ManuallyCordonedNodes(metricsClient, r.Machinery, r.Client, fakeUC, logger, "")
 	if err != nil && len(cordonedNodes) == 0 {
-		return withTiming(withDesc(errorResult(checkName, fmt.Sprintf("unable to check cordoned nodes: %v", err), timeout), descNodeHealth), start, metav1.Now())
+		return withTiming(withAction(withOwner(withDesc(errorResult(checkName, fmt.Sprintf("unable to check cordoned nodes: %v", err), timeout), descNodeHealth), upgradev1alpha1.OwnerServiceTeam), "Contact Red Hat support if node status cannot be determined."), start, metav1.Now())
 	}
 	if len(cordonedNodes) > 0 {
 		for _, node := range cordonedNodes {
 			findings = append(findings, fmt.Sprintf("cordoned worker node: %s", node))
 		}
-		return withTiming(withDesc(completedResult(checkName, upgradev1alpha1.CheckFailed,
+		return withTiming(withAction(withOwner(withDesc(completedResult(checkName, upgradev1alpha1.CheckFailed,
 			fmt.Sprintf("Upgrade validation failed: %d manually cordoned worker node(s)", len(cordonedNodes)),
-			findings, timeout), descNodeHealth), start, metav1.Now())
+			findings, timeout), descNodeHealth), upgradev1alpha1.OwnerCustomer), "Uncordon the listed nodes before upgrading: `oc adm uncordon <node-name>`"), start, metav1.Now())
 	}
-	return withTiming(withDesc(completedResult(checkName, upgradev1alpha1.CheckPassed,
-		"Upgrade validation passed: no manually cordoned nodes", findings, timeout), descNodeHealth), start, metav1.Now())
+	return withTiming(withOwner(withDesc(completedResult(checkName, upgradev1alpha1.CheckPassed,
+		"Upgrade validation passed: no manually cordoned nodes", findings, timeout), descNodeHealth), upgradev1alpha1.OwnerCustomer), start, metav1.Now())
 }
 
 func (r *ReconcileUpgradePreflightCheck) checkManuallyCordonedNodesExtended(
@@ -567,7 +595,7 @@ func (r *ReconcileUpgradePreflightCheck) checkManuallyCordonedNodesExtended(
 	if err := r.Client.List(checkCtx, nodes, &client.ListOptions{
 		Raw: &metav1.ListOptions{LabelSelector: "node-role.kubernetes.io/worker, !node-role.kubernetes.io/infra"},
 	}); err != nil {
-		return withTiming(withDesc(errorResult(checkName, fmt.Sprintf("unable to list worker nodes: %v", err), timeout), descNodeHealthExtended), start, metav1.Now())
+		return withTiming(withAction(withOwner(withDesc(errorResult(checkName, fmt.Sprintf("unable to list worker nodes: %v", err), timeout), descNodeHealthExtended), upgradev1alpha1.OwnerServiceTeam), "Contact Red Hat support if node status cannot be listed."), start, metav1.Now())
 	}
 
 	var cordoned, findings []string
@@ -582,13 +610,13 @@ func (r *ReconcileUpgradePreflightCheck) checkManuallyCordonedNodesExtended(
 		}
 	}
 	if len(cordoned) > 0 {
-		return withTiming(withDesc(completedResult(checkName, upgradev1alpha1.CheckFailed,
+		return withTiming(withAction(withOwner(withDesc(completedResult(checkName, upgradev1alpha1.CheckFailed,
 			fmt.Sprintf("%d manually cordoned node(s) of %d worker node(s)", len(cordoned), len(nodes.Items)),
-			findings, timeout), descNodeHealthExtended), start, metav1.Now())
+			findings, timeout), descNodeHealthExtended), upgradev1alpha1.OwnerCustomer), "Uncordon the listed nodes before upgrading: `oc adm uncordon <node-name>`"), start, metav1.Now())
 	}
-	return withTiming(withDesc(completedResult(checkName, upgradev1alpha1.CheckPassed,
+	return withTiming(withOwner(withDesc(completedResult(checkName, upgradev1alpha1.CheckPassed,
 		fmt.Sprintf("All %d worker node(s) are schedulable", len(nodes.Items)),
-		findings, timeout), descNodeHealthExtended), start, metav1.Now())
+		findings, timeout), descNodeHealthExtended), upgradev1alpha1.OwnerCustomer), start, metav1.Now())
 }
 
 func (r *ReconcileUpgradePreflightCheck) checkNodeTaints(
@@ -601,24 +629,24 @@ func (r *ReconcileUpgradePreflightCheck) checkNodeTaints(
 
 	metricsClient, err := r.MetricsClientBuilder.NewClient(r.Client)
 	if err != nil {
-		return withTiming(withDesc(errorResult(checkName, fmt.Sprintf("failed to create metrics client: %v", err), timeout), descNodeHealth), start, metav1.Now())
+		return withTiming(withAction(withOwner(withDesc(errorResult(checkName, fmt.Sprintf("failed to create metrics client: %v", err), timeout), descNodeHealth), upgradev1alpha1.OwnerServiceTeam), "Contact Red Hat support if node taint status cannot be determined."), start, metav1.Now())
 	}
 	findings := []string{"Uses MUO's upgrade validation logic (upgraders.NodeUnschedulableTaints)"}
 	fakeUC := createFakeUpgradeConfig("4.15.0")
 	taintedNodes, err := upgraders.NodeUnschedulableTaints(metricsClient, r.Machinery, r.Client, fakeUC, logger, "")
 	if err != nil && len(taintedNodes) == 0 {
-		return withTiming(withDesc(errorResult(checkName, fmt.Sprintf("unable to check node taints: %v", err), timeout), descNodeHealth), start, metav1.Now())
+		return withTiming(withAction(withOwner(withDesc(errorResult(checkName, fmt.Sprintf("unable to check node taints: %v", err), timeout), descNodeHealth), upgradev1alpha1.OwnerServiceTeam), "Contact Red Hat support if node taint status cannot be determined."), start, metav1.Now())
 	}
 	if len(taintedNodes) > 0 {
 		for _, node := range taintedNodes {
 			findings = append(findings, fmt.Sprintf("node with pressure taint: %s", node))
 		}
-		return withTiming(withDesc(completedResult(checkName, upgradev1alpha1.CheckFailed,
+		return withTiming(withAction(withOwner(withDesc(completedResult(checkName, upgradev1alpha1.CheckFailed,
 			fmt.Sprintf("Upgrade validation failed: %d node(s) with pressure taints", len(taintedNodes)),
-			findings, timeout), descNodeHealth), start, metav1.Now())
+			findings, timeout), descNodeHealth), upgradev1alpha1.OwnerCustomer), "Remove or adjust the unschedulable taints on the listed nodes before upgrading."), start, metav1.Now())
 	}
-	return withTiming(withDesc(completedResult(checkName, upgradev1alpha1.CheckPassed,
-		"Upgrade validation passed: no pressure taints detected", findings, timeout), descNodeHealth), start, metav1.Now())
+	return withTiming(withOwner(withDesc(completedResult(checkName, upgradev1alpha1.CheckPassed,
+		"Upgrade validation passed: no pressure taints detected", findings, timeout), descNodeHealth), upgradev1alpha1.OwnerCustomer), start, metav1.Now())
 }
 
 func (r *ReconcileUpgradePreflightCheck) checkNodeTaintsExtended(
@@ -631,7 +659,7 @@ func (r *ReconcileUpgradePreflightCheck) checkNodeTaintsExtended(
 
 	nodes := &corev1.NodeList{}
 	if err := r.Client.List(checkCtx, nodes); err != nil {
-		return withTiming(withDesc(errorResult(checkName, fmt.Sprintf("unable to list nodes: %v", err), timeout), descNodeHealthExtended), start, metav1.Now())
+		return withTiming(withAction(withOwner(withDesc(errorResult(checkName, fmt.Sprintf("unable to list nodes: %v", err), timeout), descNodeHealthExtended), upgradev1alpha1.OwnerServiceTeam), "Contact Red Hat support if node taint status cannot be listed."), start, metav1.Now())
 	}
 	var affected []string
 	for i := range nodes.Items {
@@ -645,14 +673,14 @@ func (r *ReconcileUpgradePreflightCheck) checkNodeTaintsExtended(
 		for _, name := range affected {
 			findings = append(findings, fmt.Sprintf("%s: unschedulable pressure taint", name))
 		}
-		return withTiming(withDesc(completedResult(checkName, upgradev1alpha1.CheckFailed,
+		return withTiming(withAction(withOwner(withDesc(completedResult(checkName, upgradev1alpha1.CheckFailed,
 			fmt.Sprintf("%d node(s) with pressure taints of %d total", len(affected), len(nodes.Items)),
-			findings, timeout), descNodeHealthExtended), start, metav1.Now())
+			findings, timeout), descNodeHealthExtended), upgradev1alpha1.OwnerCustomer), "Remove or adjust the unschedulable taints on the listed nodes before upgrading."), start, metav1.Now())
 	}
-	return withTiming(withDesc(completedResult(checkName, upgradev1alpha1.CheckPassed,
+	return withTiming(withOwner(withDesc(completedResult(checkName, upgradev1alpha1.CheckPassed,
 		fmt.Sprintf("All %d node(s) checked: no pressure taints", len(nodes.Items)),
 		[]string{fmt.Sprintf("Checked %d node(s) for memory, disk, and PID pressure — all healthy", len(nodes.Items))},
-		timeout), descNodeHealthExtended), start, metav1.Now())
+		timeout), descNodeHealthExtended), upgradev1alpha1.OwnerCustomer), start, metav1.Now())
 }
 
 func (r *ReconcileUpgradePreflightCheck) checkPodDisruptionBudgets(
@@ -662,30 +690,30 @@ func (r *ReconcileUpgradePreflightCheck) checkPodDisruptionBudgets(
 	start := metav1.Now()
 
 	if r.DvoClientBuilder == nil {
-		return withTiming(withDesc(errorResult(checkName, "DvoClientBuilder is not configured", timeout), descPodDisruptionBudgets), start, metav1.Now())
+		return withTiming(withAction(withOwner(withDesc(errorResult(checkName, "DvoClientBuilder is not configured", timeout), descPodDisruptionBudgets), upgradev1alpha1.OwnerServiceTeam), "Contact Red Hat support — the DVO client is missing from the operator configuration."), start, metav1.Now())
 	}
 	checkCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	if checkCtx.Err() != nil {
-		return withTiming(withDesc(errorResult(checkName, fmt.Sprintf("context done before check could start: %v", checkCtx.Err()), timeout), descPodDisruptionBudgets), start, metav1.Now())
+		return withTiming(withAction(withOwner(withDesc(errorResult(checkName, fmt.Sprintf("context done before check could start: %v", checkCtx.Err()), timeout), descPodDisruptionBudgets), upgradev1alpha1.OwnerServiceTeam), "Contact Red Hat support if the PDB check consistently times out."), start, metav1.Now())
 	}
 	metricsClient, err := r.MetricsClientBuilder.NewClient(r.Client)
 	if err != nil {
-		return withTiming(withDesc(errorResult(checkName, fmt.Sprintf("unable to build metrics client: %v", err), timeout), descPodDisruptionBudgets), start, metav1.Now())
+		return withTiming(withAction(withOwner(withDesc(errorResult(checkName, fmt.Sprintf("unable to build metrics client: %v", err), timeout), descPodDisruptionBudgets), upgradev1alpha1.OwnerServiceTeam), "Contact Red Hat support if Prometheus cannot be reached."), start, metav1.Now())
 	}
 	findings := []string{"Uses MUO's upgrade validation logic (upgraders.HealthCheckPDB)"}
 	fakeUC := createFakeUpgradeConfig("4.15.0")
 	_, passed, err := upgraders.HealthCheckPDB(metricsClient, r.Client, r.DvoClientBuilder, fakeUC, logger, fakeUC.Spec.Desired.Version)
 	if err != nil {
-		return withTiming(withDesc(errorResult(checkName, fmt.Sprintf("PodDisruptionBudget check failed: %v", err), timeout), descPodDisruptionBudgets), start, metav1.Now())
+		return withTiming(withAction(withOwner(withDesc(errorResult(checkName, fmt.Sprintf("PodDisruptionBudget check failed: %v", err), timeout), descPodDisruptionBudgets), upgradev1alpha1.OwnerServiceTeam), "Contact Red Hat support if the PDB check fails to execute."), start, metav1.Now())
 	}
 	if !passed {
-		return withTiming(withDesc(completedResult(checkName, upgradev1alpha1.CheckFailed,
+		return withTiming(withAction(withOwner(withDesc(completedResult(checkName, upgradev1alpha1.CheckFailed,
 			"Upgrade validation failed: blocking PDBs or invalid PDB configuration detected",
-			findings, timeout), descPodDisruptionBudgets), start, metav1.Now())
+			findings, timeout), descPodDisruptionBudgets), upgradev1alpha1.OwnerCustomer), "Adjust PodDisruptionBudgets in openshift-* namespaces to allow at least one pod to be unavailable during node drains (MaxUnavailable≥1 or MinAvailable<100%)."), start, metav1.Now())
 	}
-	return withTiming(withDesc(completedResult(checkName, upgradev1alpha1.CheckPassed,
-		"Upgrade validation passed: no blocking PDBs", findings, timeout), descPodDisruptionBudgets), start, metav1.Now())
+	return withTiming(withOwner(withDesc(completedResult(checkName, upgradev1alpha1.CheckPassed,
+		"Upgrade validation passed: no blocking PDBs", findings, timeout), descPodDisruptionBudgets), upgradev1alpha1.OwnerCustomer), start, metav1.Now())
 }
 
 func pdbViolation(pdb policyv1.PodDisruptionBudget) string {
@@ -719,7 +747,7 @@ func (r *ReconcileUpgradePreflightCheck) checkPodDisruptionBudgetsMasterInfraExt
 
 	nodeList := &corev1.NodeList{}
 	if err := r.Client.List(checkCtx, nodeList); err != nil {
-		return withTiming(withDesc(errorResult(checkName, fmt.Sprintf("unable to list nodes: %v", err), timeout), descPDBMasterInfra), start, metav1.Now())
+		return withTiming(withAction(withOwner(withDesc(errorResult(checkName, fmt.Sprintf("unable to list nodes: %v", err), timeout), descPDBMasterInfra), upgradev1alpha1.OwnerServiceTeam), "Contact Red Hat support if node listing fails."), start, metav1.Now())
 	}
 
 	masterInfraNames := map[string]string{}
@@ -734,7 +762,7 @@ func (r *ReconcileUpgradePreflightCheck) checkPodDisruptionBudgetsMasterInfraExt
 	// Source 1: pods currently running on master/infra nodes.
 	podList := &corev1.PodList{}
 	if err := r.Client.List(checkCtx, podList); err != nil {
-		return withTiming(withDesc(errorResult(checkName, fmt.Sprintf("unable to list pods: %v", err), timeout), descPDBMasterInfra), start, metav1.Now())
+		return withTiming(withAction(withOwner(withDesc(errorResult(checkName, fmt.Sprintf("unable to list pods: %v", err), timeout), descPDBMasterInfra), upgradev1alpha1.OwnerServiceTeam), "Contact Red Hat support if pod listing fails."), start, metav1.Now())
 	}
 	masterInfraPods := []corev1.Pod{}
 	for _, pod := range podList.Items {
@@ -748,12 +776,12 @@ func (r *ReconcileUpgradePreflightCheck) checkPodDisruptionBudgetsMasterInfraExt
 	// nodes regardless of whether pods are currently running.
 	dsList := &appsv1.DaemonSetList{}
 	if err := r.Client.List(checkCtx, dsList); err != nil {
-		return withTiming(withDesc(errorResult(checkName, fmt.Sprintf("unable to list DaemonSets: %v", err), timeout), descPDBMasterInfra), start, metav1.Now())
+		return withTiming(withAction(withOwner(withDesc(errorResult(checkName, fmt.Sprintf("unable to list DaemonSets: %v", err), timeout), descPDBMasterInfra), upgradev1alpha1.OwnerServiceTeam), "Contact Red Hat support if DaemonSet listing fails."), start, metav1.Now())
 	}
 
 	pdbList := &policyv1.PodDisruptionBudgetList{}
 	if err := r.Client.List(checkCtx, pdbList); err != nil {
-		return withTiming(withDesc(errorResult(checkName, fmt.Sprintf("unable to list PodDisruptionBudgets: %v", err), timeout), descPDBMasterInfra), start, metav1.Now())
+		return withTiming(withAction(withOwner(withDesc(errorResult(checkName, fmt.Sprintf("unable to list PodDisruptionBudgets: %v", err), timeout), descPDBMasterInfra), upgradev1alpha1.OwnerServiceTeam), "Contact Red Hat support if PDB listing fails."), start, metav1.Now())
 	}
 
 	// Track PDBs already flagged to avoid duplicate findings.
@@ -790,16 +818,16 @@ func (r *ReconcileUpgradePreflightCheck) checkPodDisruptionBudgetsMasterInfraExt
 	}
 
 	if len(blocking) > 0 {
-		return withTiming(withDesc(completedResult(checkName, upgradev1alpha1.CheckFailed,
+		return withTiming(withAction(withOwner(withDesc(completedResult(checkName, upgradev1alpha1.CheckFailed,
 			fmt.Sprintf("Found %d restrictive PDB(s) that could block drain of %d master/infra node(s)",
 				len(blocking), len(masterInfraNames)),
-			findings, timeout), descPDBMasterInfra), start, metav1.Now())
+			findings, timeout), descPDBMasterInfra), upgradev1alpha1.OwnerCustomer), "Adjust the listed PodDisruptionBudgets to allow node drains, or move the workloads off master/infra nodes."), start, metav1.Now())
 	}
 	summary := fmt.Sprintf("Checked PDBs against %d master/infra node(s): none blocking", len(masterInfraNames))
 	if len(masterInfraNames) == 0 {
 		summary = "No master/infra nodes found"
 	}
-	return withTiming(withDesc(completedResult(checkName, upgradev1alpha1.CheckPassed, summary, findings, timeout), descPDBMasterInfra), start, metav1.Now())
+	return withTiming(withOwner(withDesc(completedResult(checkName, upgradev1alpha1.CheckPassed, summary, findings, timeout), descPDBMasterInfra), upgradev1alpha1.OwnerCustomer), start, metav1.Now())
 }
 
 func pdbCoveredMasterInfraPods(pdb policyv1.PodDisruptionBudget, pods []corev1.Pod, nodeRoles map[string]string) []corev1.Pod {
@@ -890,22 +918,22 @@ func (r *ReconcileUpgradePreflightCheck) checkUpgradeableCondition(
 	cvClient := r.CvClientBuilder.New(r.Client)
 	clusterVersion, err := cvClient.GetClusterVersion()
 	if err != nil {
-		return withTiming(withDesc(errorResult(checkName, fmt.Sprintf("unable to get cluster version: %v", err), timeout), descUpgradeableCondition), start, metav1.Now())
+		return withTiming(withAction(withOwner(withDesc(errorResult(checkName, fmt.Sprintf("unable to get cluster version: %v", err), timeout), descUpgradeableCondition), upgradev1alpha1.OwnerServiceTeam), "Contact Red Hat support if ClusterVersion cannot be queried."), start, metav1.Now())
 	}
 	for _, condition := range clusterVersion.Status.Conditions {
 		if condition.Type == configv1.OperatorUpgradeable && condition.Status == configv1.ConditionFalse {
-			return withTiming(withDesc(completedResult(checkName, upgradev1alpha1.CheckFailed,
+			return withTiming(withAction(withOwner(withDesc(completedResult(checkName, upgradev1alpha1.CheckFailed,
 				fmt.Sprintf("Cluster not upgradeable: %s", condition.Reason),
 				[]string{
 					fmt.Sprintf("Upgradeable=False: reason=%s", condition.Reason),
 					fmt.Sprintf("message=%s", condition.Message),
-				}, timeout), descUpgradeableCondition), start, metav1.Now())
+				}, timeout), descUpgradeableCondition), upgradev1alpha1.OwnerCustomer), "Resolve the Upgradeable=False condition. For AdminAck gates, use the ROSA CLI or update the admin-acks ConfigMap."), start, metav1.Now())
 		}
 	}
-	return withTiming(withDesc(completedResult(checkName, upgradev1alpha1.CheckPassed,
+	return withTiming(withOwner(withDesc(completedResult(checkName, upgradev1alpha1.CheckPassed,
 		"Cluster is upgradeable",
 		[]string{"Upgradeable condition is True (or not set)"},
-		timeout), descUpgradeableCondition), start, metav1.Now())
+		timeout), descUpgradeableCondition), upgradev1alpha1.OwnerCustomer), start, metav1.Now())
 }
 
 func (r *ReconcileUpgradePreflightCheck) checkPullSecretValid(
@@ -916,15 +944,15 @@ func (r *ReconcileUpgradePreflightCheck) checkPullSecretValid(
 
 	_, err := util.GetAccessToken(r.Client)
 	if err != nil {
-		return withTiming(withDesc(completedResult(checkName, upgradev1alpha1.CheckFailed,
+		return withTiming(withAction(withOwner(withDesc(completedResult(checkName, upgradev1alpha1.CheckFailed,
 			"Pull secret validation failed",
 			[]string{err.Error()},
-			timeout), descPullSecretValid), start, metav1.Now())
+			timeout), descPullSecretValid), upgradev1alpha1.OwnerCustomer), "Renew the cluster pull secret at cloud.openshift.com and update openshift-config/pull-secret."), start, metav1.Now())
 	}
-	return withTiming(withDesc(completedResult(checkName, upgradev1alpha1.CheckPassed,
+	return withTiming(withOwner(withDesc(completedResult(checkName, upgradev1alpha1.CheckPassed,
 		"Pull secret is valid",
 		[]string{"cloud.openshift.com auth entry is present in the cluster pull secret"},
-		timeout), descPullSecretValid), start, metav1.Now())
+		timeout), descPullSecretValid), upgradev1alpha1.OwnerCustomer), start, metav1.Now())
 }
 
 func (r *ReconcileUpgradePreflightCheck) checkAdminAcks(
@@ -946,17 +974,17 @@ func (r *ReconcileUpgradePreflightCheck) checkAdminAcks(
 	if err != nil {
 		if apierrors.IsNotFound(err) {
 			if isYStream {
-				return withTiming(withDesc(completedResult(checkName, upgradev1alpha1.CheckFailed,
+				return withTiming(withAction(withOwner(withDesc(completedResult(checkName, upgradev1alpha1.CheckFailed,
 					"admin-acks ConfigMap not found — required for y-stream upgrades",
 					[]string{"ConfigMap openshift-config/admin-acks does not exist"},
-					timeout), descAdminAcks), start, metav1.Now())
+					timeout), descAdminAcks), upgradev1alpha1.OwnerCustomer), "Acknowledge the required upgrade gates. For ROSA, use `rosa upgrade cluster -c <cluster-id>`."), start, metav1.Now())
 			}
-			return withTiming(withDesc(completedResult(checkName, upgradev1alpha1.CheckPassed,
+			return withTiming(withOwner(withDesc(completedResult(checkName, upgradev1alpha1.CheckPassed,
 				"Admin acks not required for z-stream upgrade",
 				[]string{"ConfigMap openshift-config/admin-acks does not exist (not required for z-stream)"},
-				timeout), descAdminAcks), start, metav1.Now())
+				timeout), descAdminAcks), upgradev1alpha1.OwnerCustomer), start, metav1.Now())
 		}
-		return withTiming(withDesc(errorResult(checkName, fmt.Sprintf("unable to read admin-acks ConfigMap: %v", err), timeout), descAdminAcks), start, metav1.Now())
+		return withTiming(withAction(withOwner(withDesc(errorResult(checkName, fmt.Sprintf("unable to read admin-acks ConfigMap: %v", err), timeout), descAdminAcks), upgradev1alpha1.OwnerServiceTeam), "Contact Red Hat support if the admin-acks ConfigMap cannot be read."), start, metav1.Now())
 	}
 
 	var ackKeys []string
@@ -964,14 +992,43 @@ func (r *ReconcileUpgradePreflightCheck) checkAdminAcks(
 		ackKeys = append(ackKeys, fmt.Sprintf("%s=%s", k, cm.Data[k]))
 	}
 	if isYStream && len(cm.Data) == 0 {
-		return withTiming(withDesc(completedResult(checkName, upgradev1alpha1.CheckFailed,
+		return withTiming(withAction(withOwner(withDesc(completedResult(checkName, upgradev1alpha1.CheckFailed,
 			"admin-acks ConfigMap exists but has no entries",
 			[]string{"ConfigMap openshift-config/admin-acks has no data entries"},
-			timeout), descAdminAcks), start, metav1.Now())
+			timeout), descAdminAcks), upgradev1alpha1.OwnerCustomer), "Acknowledge the required upgrade gates. For ROSA, use `rosa upgrade cluster -c <cluster-id>`."), start, metav1.Now())
 	}
-	return withTiming(withDesc(completedResult(checkName, upgradev1alpha1.CheckPassed,
+	return withTiming(withOwner(withDesc(completedResult(checkName, upgradev1alpha1.CheckPassed,
 		fmt.Sprintf("Admin acks present: %d entry/entries in openshift-config/admin-acks", len(ackKeys)),
-		ackKeys, timeout), descAdminAcks), start, metav1.Now())
+		ackKeys, timeout), descAdminAcks), upgradev1alpha1.OwnerCustomer), start, metav1.Now())
+}
+
+func (r *ReconcileUpgradePreflightCheck) checkUpgradeInFlight(
+	ctx context.Context, logger logr.Logger, timeout time.Duration,
+) upgradev1alpha1.PreflightCheckResult {
+	const checkName = "UpgradeInFlight"
+	start := metav1.Now()
+	_, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	cvClient := r.CvClientBuilder.New(r.Client)
+	clusterVersion, err := cvClient.GetClusterVersion()
+	if err != nil {
+		return withTiming(withAction(withOwner(withDesc(errorResult(checkName, fmt.Sprintf("unable to get cluster version: %v", err), timeout), descUpgradeInFlight), upgradev1alpha1.OwnerServiceTeam), "Contact Red Hat support if ClusterVersion cannot be queried."), start, metav1.Now())
+	}
+	for _, condition := range clusterVersion.Status.Conditions {
+		if condition.Type == configv1.OperatorProgressing && condition.Status == configv1.ConditionTrue {
+			return withTiming(withAction(withOwner(withDesc(completedResult(checkName, upgradev1alpha1.CheckFailed,
+				fmt.Sprintf("Upgrade already in progress: %s", condition.Message),
+				[]string{
+					fmt.Sprintf("Progressing=True: reason=%s", condition.Reason),
+					fmt.Sprintf("message=%s", condition.Message),
+				}, timeout), descUpgradeInFlight), upgradev1alpha1.OwnerServiceTeam), "Wait for the in-progress upgrade to complete before starting another. Contact Red Hat support if the upgrade appears stuck."), start, metav1.Now())
+		}
+	}
+	return withTiming(withOwner(withDesc(completedResult(checkName, upgradev1alpha1.CheckPassed,
+		"No upgrade in progress",
+		[]string{"ClusterVersion Progressing condition is False (or not set)"},
+		timeout), descUpgradeInFlight), upgradev1alpha1.OwnerServiceTeam), start, metav1.Now())
 }
 
 func (r *ReconcileUpgradePreflightCheck) SetupWithManager(mgr ctrl.Manager) error {
