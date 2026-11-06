@@ -17,8 +17,9 @@ const (
 
 type clusterVersionCheck struct{}
 
-func (c *clusterVersionCheck) Name() string        { return "ClusterVersion" }
-func (c *clusterVersionCheck) Description() string { return descClusterVersion }
+func (c *clusterVersionCheck) Name() string                  { return "ClusterVersion" }
+func (c *clusterVersionCheck) Description() string            { return descClusterVersion }
+func (c *clusterVersionCheck) DefaultTimeout() time.Duration  { return 0 }
 func (c *clusterVersionCheck) DefaultOwner() upgradev1alpha1.CheckOwner {
 	return upgradev1alpha1.OwnerServiceTeam
 }
@@ -47,8 +48,9 @@ func (c *clusterVersionCheck) Run(ctx context.Context, deps CheckDependencies, l
 
 type upgradeInFlightCheck struct{}
 
-func (c *upgradeInFlightCheck) Name() string        { return "UpgradeInFlight" }
-func (c *upgradeInFlightCheck) Description() string { return descUpgradeInFlight }
+func (c *upgradeInFlightCheck) Name() string                  { return "UpgradeInFlight" }
+func (c *upgradeInFlightCheck) Description() string            { return descUpgradeInFlight }
+func (c *upgradeInFlightCheck) DefaultTimeout() time.Duration  { return 0 }
 func (c *upgradeInFlightCheck) DefaultOwner() upgradev1alpha1.CheckOwner {
 	return upgradev1alpha1.OwnerServiceTeam
 }

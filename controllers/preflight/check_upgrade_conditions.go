@@ -22,8 +22,9 @@ const (
 
 type upgradeableConditionCheck struct{}
 
-func (c *upgradeableConditionCheck) Name() string        { return "UpgradeableCondition" }
-func (c *upgradeableConditionCheck) Description() string { return descUpgradeableCondition }
+func (c *upgradeableConditionCheck) Name() string                 { return "UpgradeableCondition" }
+func (c *upgradeableConditionCheck) Description() string           { return descUpgradeableCondition }
+func (c *upgradeableConditionCheck) DefaultTimeout() time.Duration { return 0 }
 func (c *upgradeableConditionCheck) DefaultOwner() upgradev1alpha1.CheckOwner {
 	return upgradev1alpha1.OwnerCustomer
 }
@@ -61,8 +62,9 @@ func (c *upgradeableConditionCheck) Run(ctx context.Context, deps CheckDependenc
 
 type pullSecretCheck struct{}
 
-func (c *pullSecretCheck) Name() string        { return "PullSecretValid" }
-func (c *pullSecretCheck) Description() string { return descPullSecretValid }
+func (c *pullSecretCheck) Name() string                 { return "PullSecretValid" }
+func (c *pullSecretCheck) Description() string           { return descPullSecretValid }
+func (c *pullSecretCheck) DefaultTimeout() time.Duration { return 0 }
 func (c *pullSecretCheck) DefaultOwner() upgradev1alpha1.CheckOwner {
 	return upgradev1alpha1.OwnerCustomer
 }
@@ -86,8 +88,9 @@ func (c *pullSecretCheck) Run(ctx context.Context, deps CheckDependencies, logge
 
 type adminAcksCheck struct{}
 
-func (c *adminAcksCheck) Name() string        { return "AdminAcks" }
-func (c *adminAcksCheck) Description() string { return descAdminAcks }
+func (c *adminAcksCheck) Name() string                 { return "AdminAcks" }
+func (c *adminAcksCheck) Description() string           { return descAdminAcks }
+func (c *adminAcksCheck) DefaultTimeout() time.Duration { return 0 }
 func (c *adminAcksCheck) DefaultOwner() upgradev1alpha1.CheckOwner {
 	return upgradev1alpha1.OwnerCustomer
 }

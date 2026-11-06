@@ -27,8 +27,6 @@ var log = logf.Log.WithName("controller_upgradepreflightcheck")
 
 const (
 	preflightControllerFeatureGate = "PreflightController"
-	defaultCheckTimeout            = 30 * time.Second
-
 	maxPreflightChecks    = 10
 	preflightCheckTTL     = 24 * time.Hour
 	deleteAfterAnnotation = "preflight.managed.openshift.io/delete-after"
@@ -200,24 +198,28 @@ func (r *ReconcileUpgradePreflightCheck) runChecks(
 		DesiredVersion:       instance.Spec.Desired.Version,
 	}
 	enabled := instance.Spec.Checks
-	timeout := checkTimeout(instance)
+
+	runCtx := ctx
+	if instance.Spec.OverallTimeoutSeconds > 0 {
+		var cancel context.CancelFunc
+		runCtx, cancel = context.WithTimeout(ctx, time.Duration(instance.Spec.OverallTimeoutSeconds)*time.Second)
+		defer cancel()
+	}
 
 	var results []upgradev1alpha1.PreflightCheckResult
 	for _, check := range registeredChecks {
+		timeout := resolveCheckTimeout(check, instance.Spec)
+		if runCtx.Err() != nil {
+			results = append(results, timedOutResult(check, timeout))
+			continue
+		}
 		if !checkAllowed(check.Name(), enabled) {
 			results = append(results, skippedResult(check, timeout))
 			continue
 		}
-		results = append(results, runCheck(check, ctx, deps, logger, timeout))
+		results = append(results, runCheck(check, runCtx, deps, logger, timeout))
 	}
 	return results
-}
-
-func checkTimeout(instance *upgradev1alpha1.UpgradePreflightCheck) time.Duration {
-	if instance.Spec.CheckTimeoutSeconds > 0 {
-		return time.Duration(instance.Spec.CheckTimeoutSeconds) * time.Second
-	}
-	return defaultCheckTimeout
 }
 
 func checkAllowed(name string, allowlist []string) bool {

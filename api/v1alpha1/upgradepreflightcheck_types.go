@@ -11,12 +11,18 @@ import (
 type UpgradePreflightCheckSpec struct {
 	UpgradeConfigSpec `json:",inline"`
 
-	// CheckTimeoutSeconds is the maximum number of seconds each individual check
-	// may run before it is cancelled and recorded as Result=Error.
-	// Defaults to 30 seconds.
+	// DefaultCheckTimeoutSeconds is the per-check timeout fallback used when a check
+	// does not declare its own timeout. Defaults to 30 seconds.
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:default=30
-	CheckTimeoutSeconds int32 `json:"checkTimeoutSeconds,omitempty"`
+	DefaultCheckTimeoutSeconds int32 `json:"defaultCheckTimeoutSeconds,omitempty"`
+
+	// OverallTimeoutSeconds is the maximum total wall-clock time allowed for all checks
+	// to complete. If this deadline is reached, any checks that have not yet started are
+	// recorded with Result=TimedOut. Checks already running receive a cancelled context
+	// and are recorded as Result=Error. When 0 (default), there is no overall deadline.
+	// +kubebuilder:validation:Optional
+	OverallTimeoutSeconds int32 `json:"overallTimeoutSeconds,omitempty"`
 
 	// Checks is an optional allowlist of check names to run. When empty, all checks run.
 	// Checks not in this list are recorded with Result=Skipped.
@@ -25,7 +31,7 @@ type UpgradePreflightCheckSpec struct {
 }
 
 // CheckExecutionState describes whether a check was able to run.
-// +kubebuilder:validation:Enum={"Completed","Error","Skipped"}
+// +kubebuilder:validation:Enum={"Completed","Error","Skipped","TimedOut"}
 type CheckExecutionState string
 
 const (
@@ -35,6 +41,8 @@ const (
 	CheckError CheckExecutionState = "Error"
 	// CheckSkipped means the check was excluded by the Checks allowlist in the spec.
 	CheckSkipped CheckExecutionState = "Skipped"
+	// CheckTimedOut means the check never started because the overall run timeout was reached.
+	CheckTimedOut CheckExecutionState = "TimedOut"
 )
 
 // CheckOwner identifies who is responsible for resolving a failed or errored check.
@@ -49,7 +57,7 @@ const (
 )
 
 // CheckResult is the top-level health verdict for a preflight check.
-// +kubebuilder:validation:Enum={"Passed","Failed","Error","Skipped","Unknown"}
+// +kubebuilder:validation:Enum={"Passed","Failed","Error","Skipped","TimedOut","Unknown"}
 type CheckResult string
 
 const (
@@ -57,10 +65,12 @@ const (
 	CheckPassed CheckResult = "Passed"
 	// CheckFailed means the cluster has a health issue that may block an upgrade.
 	CheckFailed CheckResult = "Failed"
-	// CheckError means the check could not determine cluster health (infrastructure/transient failure).
+	// CheckResultError means the check could not determine cluster health (infrastructure/transient failure).
 	CheckResultError CheckResult = "Error"
 	// CheckResultSkipped means the check was not run (excluded by the Checks allowlist).
 	CheckResultSkipped CheckResult = "Skipped"
+	// CheckResultTimedOut means the check never started because the overall run deadline was exceeded.
+	CheckResultTimedOut CheckResult = "TimedOut"
 	// CheckResultUnknown is the initial state before a check has run.
 	CheckResultUnknown CheckResult = "Unknown"
 )

@@ -20,8 +20,9 @@ const (
 
 type manuallyCordonedNodesCheck struct{}
 
-func (c *manuallyCordonedNodesCheck) Name() string        { return "ManuallyCordonedNodes" }
-func (c *manuallyCordonedNodesCheck) Description() string { return descNodeHealth }
+func (c *manuallyCordonedNodesCheck) Name() string                 { return "ManuallyCordonedNodes" }
+func (c *manuallyCordonedNodesCheck) Description() string           { return descNodeHealth }
+func (c *manuallyCordonedNodesCheck) DefaultTimeout() time.Duration { return 0 }
 func (c *manuallyCordonedNodesCheck) DefaultOwner() upgradev1alpha1.CheckOwner {
 	return upgradev1alpha1.OwnerCustomer
 }
@@ -67,8 +68,9 @@ func (c *manuallyCordonedNodesCheck) Run(ctx context.Context, deps CheckDependen
 
 type manuallyCordonedNodesExtendedCheck struct{}
 
-func (c *manuallyCordonedNodesExtendedCheck) Name() string        { return "ManuallyCordonedNodesExtended" }
-func (c *manuallyCordonedNodesExtendedCheck) Description() string { return descNodeHealthExtended }
+func (c *manuallyCordonedNodesExtendedCheck) Name() string                 { return "ManuallyCordonedNodesExtended" }
+func (c *manuallyCordonedNodesExtendedCheck) Description() string           { return descNodeHealthExtended }
+func (c *manuallyCordonedNodesExtendedCheck) DefaultTimeout() time.Duration { return 0 }
 func (c *manuallyCordonedNodesExtendedCheck) DefaultOwner() upgradev1alpha1.CheckOwner {
 	return upgradev1alpha1.OwnerCustomer
 }
@@ -114,8 +116,9 @@ func (c *manuallyCordonedNodesExtendedCheck) Run(ctx context.Context, deps Check
 
 type nodeTaintsCheck struct{}
 
-func (c *nodeTaintsCheck) Name() string        { return "NodeUnschedulableTaints" }
-func (c *nodeTaintsCheck) Description() string { return descNodeHealth }
+func (c *nodeTaintsCheck) Name() string                 { return "NodeUnschedulableTaints" }
+func (c *nodeTaintsCheck) Description() string           { return descNodeHealth }
+func (c *nodeTaintsCheck) DefaultTimeout() time.Duration { return 0 }
 func (c *nodeTaintsCheck) DefaultOwner() upgradev1alpha1.CheckOwner {
 	return upgradev1alpha1.OwnerCustomer
 }
@@ -161,8 +164,9 @@ func (c *nodeTaintsCheck) Run(ctx context.Context, deps CheckDependencies, logge
 
 type nodeTaintsExtendedCheck struct{}
 
-func (c *nodeTaintsExtendedCheck) Name() string        { return "NodeUnschedulableTaintsExtended" }
-func (c *nodeTaintsExtendedCheck) Description() string { return descNodeHealthExtended }
+func (c *nodeTaintsExtendedCheck) Name() string                 { return "NodeUnschedulableTaintsExtended" }
+func (c *nodeTaintsExtendedCheck) Description() string           { return descNodeHealthExtended }
+func (c *nodeTaintsExtendedCheck) DefaultTimeout() time.Duration { return 0 }
 func (c *nodeTaintsExtendedCheck) DefaultOwner() upgradev1alpha1.CheckOwner {
 	return upgradev1alpha1.OwnerCustomer
 }

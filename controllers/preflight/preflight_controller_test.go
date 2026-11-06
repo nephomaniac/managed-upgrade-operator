@@ -36,8 +36,9 @@ import (
 // testPanicCheck is a check that always panics — used to exercise runCheck panic recovery.
 type testPanicCheck struct{}
 
-func (c *testPanicCheck) Name() string        { return "TestPanic" }
-func (c *testPanicCheck) Description() string { return "always panics" }
+func (c *testPanicCheck) Name() string                 { return "TestPanic" }
+func (c *testPanicCheck) Description() string           { return "always panics" }
+func (c *testPanicCheck) DefaultTimeout() time.Duration { return 0 }
 func (c *testPanicCheck) DefaultOwner() upgradev1alpha1.CheckOwner {
 	return upgradev1alpha1.OwnerServiceTeam
 }
@@ -390,14 +391,22 @@ var _ = Describe("PreflightController", func() {
 		})
 	})
 
-	Describe("checkTimeout", func() {
-		It("returns the default when CheckTimeoutSeconds is 0", func() {
-			Expect(checkTimeout(instance)).To(Equal(defaultCheckTimeout))
+	Describe("resolveCheckTimeout", func() {
+		It("returns the global constant when spec and check have no override", func() {
+			check := &clusterVersionCheck{}
+			Expect(resolveCheckTimeout(check, instance.Spec)).To(Equal(defaultCheckTimeout))
 		})
 
-		It("returns the spec value when set", func() {
-			instance.Spec.CheckTimeoutSeconds = 60
-			Expect(checkTimeout(instance)).To(Equal(60 * time.Second))
+		It("returns spec.defaultCheckTimeoutSeconds when check returns 0", func() {
+			check := &clusterVersionCheck{}
+			instance.Spec.DefaultCheckTimeoutSeconds = 60
+			Expect(resolveCheckTimeout(check, instance.Spec)).To(Equal(60 * time.Second))
+		})
+
+		It("prefers check.DefaultTimeout() over spec value", func() {
+			check := &podDisruptionBudgetsCheck{}
+			instance.Spec.DefaultCheckTimeoutSeconds = 10
+			Expect(resolveCheckTimeout(check, instance.Spec)).To(Equal(60 * time.Second))
 		})
 	})
 

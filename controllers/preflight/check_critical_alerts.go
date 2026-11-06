@@ -19,8 +19,9 @@ const (
 
 type criticalAlertsCheck struct{}
 
-func (c *criticalAlertsCheck) Name() string        { return "CriticalAlerts" }
-func (c *criticalAlertsCheck) Description() string { return descCriticalAlerts }
+func (c *criticalAlertsCheck) Name() string                 { return "CriticalAlerts" }
+func (c *criticalAlertsCheck) Description() string           { return descCriticalAlerts }
+func (c *criticalAlertsCheck) DefaultTimeout() time.Duration { return 0 }
 func (c *criticalAlertsCheck) DefaultOwner() upgradev1alpha1.CheckOwner {
 	return upgradev1alpha1.OwnerCustomer
 }
@@ -59,8 +60,9 @@ func (c *criticalAlertsCheck) Run(ctx context.Context, deps CheckDependencies, l
 
 type criticalAlertsExtendedCheck struct{}
 
-func (c *criticalAlertsExtendedCheck) Name() string        { return "CriticalAlertsExtended" }
-func (c *criticalAlertsExtendedCheck) Description() string { return descCriticalAlertsExtended }
+func (c *criticalAlertsExtendedCheck) Name() string                 { return "CriticalAlertsExtended" }
+func (c *criticalAlertsExtendedCheck) Description() string           { return descCriticalAlertsExtended }
+func (c *criticalAlertsExtendedCheck) DefaultTimeout() time.Duration { return 0 }
 func (c *criticalAlertsExtendedCheck) DefaultOwner() upgradev1alpha1.CheckOwner {
 	return upgradev1alpha1.OwnerCustomer
 }

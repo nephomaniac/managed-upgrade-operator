@@ -11,10 +11,23 @@ import (
 )
 
 const (
-	prometheusRetries = 3
+	prometheusRetries   = 3
+	defaultCheckTimeout = 30 * time.Second
 )
 
 var prometheusRetryBase = 2 * time.Second
+
+// resolveCheckTimeout returns the timeout to apply to a single check.
+// Priority: check.DefaultTimeout() > spec.DefaultCheckTimeoutSeconds > 30s constant.
+func resolveCheckTimeout(check PreflightCheck, spec upgradev1alpha1.UpgradePreflightCheckSpec) time.Duration {
+	if d := check.DefaultTimeout(); d > 0 {
+		return d
+	}
+	if spec.DefaultCheckTimeoutSeconds > 0 {
+		return time.Duration(spec.DefaultCheckTimeoutSeconds) * time.Second
+	}
+	return defaultCheckTimeout
+}
 
 // runCheck executes a PreflightCheck with timeout, panic recovery, timing, and
 // framework-level field injection (Description, Owner, Action). Check authors
@@ -59,6 +72,17 @@ func runCheck(check PreflightCheck, ctx context.Context, deps CheckDependencies,
 		r = withAction(r, output.Action)
 	}
 	return withTiming(r, start, metav1.Now())
+}
+
+func timedOutResult(check PreflightCheck, timeout time.Duration) upgradev1alpha1.PreflightCheckResult {
+	return withDesc(upgradev1alpha1.PreflightCheckResult{
+		Name:           check.Name(),
+		Result:         upgradev1alpha1.CheckResultTimedOut,
+		Owner:          upgradev1alpha1.OwnerServiceTeam,
+		Action:         "Increase spec.overallTimeoutSeconds or reduce the number of checks.",
+		TimeoutSeconds: int32(timeout.Seconds()),
+		Execution:      upgradev1alpha1.CheckExecution{State: upgradev1alpha1.CheckTimedOut},
+	}, check.Description())
 }
 
 func skippedResult(check PreflightCheck, timeout time.Duration) upgradev1alpha1.PreflightCheckResult {

@@ -19,8 +19,9 @@ const (
 
 type clusterOperatorsCheck struct{}
 
-func (c *clusterOperatorsCheck) Name() string        { return "ClusterOperators" }
-func (c *clusterOperatorsCheck) Description() string { return descClusterOperators }
+func (c *clusterOperatorsCheck) Name() string                 { return "ClusterOperators" }
+func (c *clusterOperatorsCheck) Description() string           { return descClusterOperators }
+func (c *clusterOperatorsCheck) DefaultTimeout() time.Duration { return 0 }
 func (c *clusterOperatorsCheck) DefaultOwner() upgradev1alpha1.CheckOwner {
 	return upgradev1alpha1.OwnerCustomer
 }
@@ -59,8 +60,9 @@ func (c *clusterOperatorsCheck) Run(ctx context.Context, deps CheckDependencies,
 
 type clusterOperatorsExtendedCheck struct{}
 
-func (c *clusterOperatorsExtendedCheck) Name() string        { return "ClusterOperatorsExtended" }
-func (c *clusterOperatorsExtendedCheck) Description() string { return descClusterOperatorsExtended }
+func (c *clusterOperatorsExtendedCheck) Name() string                 { return "ClusterOperatorsExtended" }
+func (c *clusterOperatorsExtendedCheck) Description() string           { return descClusterOperatorsExtended }
+func (c *clusterOperatorsExtendedCheck) DefaultTimeout() time.Duration { return 0 }
 func (c *clusterOperatorsExtendedCheck) DefaultOwner() upgradev1alpha1.CheckOwner {
 	return upgradev1alpha1.OwnerCustomer
 }

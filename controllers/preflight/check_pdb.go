@@ -21,8 +21,9 @@ const (
 
 type podDisruptionBudgetsCheck struct{}
 
-func (c *podDisruptionBudgetsCheck) Name() string        { return "PodDisruptionBudgets" }
-func (c *podDisruptionBudgetsCheck) Description() string { return descPodDisruptionBudgets }
+func (c *podDisruptionBudgetsCheck) Name() string                 { return "PodDisruptionBudgets" }
+func (c *podDisruptionBudgetsCheck) Description() string           { return descPodDisruptionBudgets }
+func (c *podDisruptionBudgetsCheck) DefaultTimeout() time.Duration { return 60 * time.Second }
 func (c *podDisruptionBudgetsCheck) DefaultOwner() upgradev1alpha1.CheckOwner {
 	return upgradev1alpha1.OwnerCustomer
 }
@@ -81,8 +82,9 @@ func (c *podDisruptionBudgetsCheck) Run(ctx context.Context, deps CheckDependenc
 
 type pdbMasterInfraExtendedCheck struct{}
 
-func (c *pdbMasterInfraExtendedCheck) Name() string { return "PodDisruptionBudgetsMasterInfraExtended" }
-func (c *pdbMasterInfraExtendedCheck) Description() string { return descPDBMasterInfra }
+func (c *pdbMasterInfraExtendedCheck) Name() string                 { return "PodDisruptionBudgetsMasterInfraExtended" }
+func (c *pdbMasterInfraExtendedCheck) Description() string           { return descPDBMasterInfra }
+func (c *pdbMasterInfraExtendedCheck) DefaultTimeout() time.Duration { return 60 * time.Second }
 func (c *pdbMasterInfraExtendedCheck) DefaultOwner() upgradev1alpha1.CheckOwner {
 	return upgradev1alpha1.OwnerCustomer
 }

@@ -61,6 +61,10 @@ type PreflightCheck interface {
 	// DefaultOwner returns who is responsible when this check fails or errors
 	// and Run() does not set CheckOutput.Owner.
 	DefaultOwner() upgradev1alpha1.CheckOwner
+	// DefaultTimeout returns the preferred per-check timeout. Return 0 to inherit
+	// the spec.defaultCheckTimeoutSeconds value (or the global 30s fallback).
+	// Override this for checks that are known to be slow (e.g. PDB node scans).
+	DefaultTimeout() time.Duration
 	// Run executes the check. ctx already has the timeout applied.
 	// Set CheckOutput.Action on Failed and Error results.
 	Run(ctx context.Context, deps CheckDependencies, logger logr.Logger, timeout time.Duration) CheckOutput

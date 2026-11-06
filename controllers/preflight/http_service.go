@@ -41,8 +41,9 @@ type CheckRequest struct {
 	TargetVersion       string   `json:"targetVersion"`
 	TargetChannel       string   `json:"targetChannel"`
 	Platform            string   `json:"platform"`
-	CheckTimeoutSeconds int32    `json:"checkTimeoutSeconds,omitempty"`
-	ChecksToRun         []string `json:"checksToRun,omitempty"`
+	DefaultCheckTimeoutSeconds int32    `json:"defaultCheckTimeoutSeconds,omitempty"`
+	OverallTimeoutSeconds      int32    `json:"overallTimeoutSeconds,omitempty"`
+	ChecksToRun                []string `json:"checksToRun,omitempty"`
 	Description         string   `json:"description,omitempty"`
 	// NamePrefix sets a custom prefix for the generated UpgradePreflightCheck CR name.
 	// Must be a valid DNS label segment (lowercase alphanumeric and hyphens, no leading/trailing hyphens).
@@ -476,8 +477,9 @@ func (s *PreflightHTTPServer) buildInternalCR(requestID string, req CheckRequest
 				UpgradeAt:            time.Now().Format(time.RFC3339),
 				PDBForceDrainTimeout: 60,
 			},
-			CheckTimeoutSeconds: req.CheckTimeoutSeconds,
-			Checks:              req.ChecksToRun,
+			DefaultCheckTimeoutSeconds: req.DefaultCheckTimeoutSeconds,
+			OverallTimeoutSeconds:      req.OverallTimeoutSeconds,
+			Checks:                     req.ChecksToRun,
 		},
 	}
 }
