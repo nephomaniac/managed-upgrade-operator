@@ -58,6 +58,7 @@ const (
 	descCriticalAlertsExtended   = "Detailed critical alert analysis without ignore filters. Lists all firing critical alerts in core OpenShift namespaces (openshift-*, kube-*, default)."
 	descNodeHealthExtended       = "In-depth node health analysis. Shows all worker nodes that are cordoned or have memory, disk, or PID pressure conditions that could block workload scheduling."
 	descPodDisruptionBudgetsExtended = "Comprehensive PDB analysis. Lists all PDBs with MaxUnavailable=0, MaxUnavailable=0%, or MinAvailable=100% configurations that could block node drains."
+	descPDBMasterInfra               = "Identifies PodDisruptionBudgets that could block master or infra node drains. Scans all pods running on master/infra nodes (regardless of namespace) and reports any with restrictive PDBs. Helps detect customer workloads accidentally scheduled on control plane nodes."
 )
 
 var allChecks = []string{
@@ -68,6 +69,7 @@ var allChecks = []string{
 	"CriticalAlertsExtended",
 	"PodDisruptionBudgets",
 	"PodDisruptionBudgetsExtended",
+	"PodDisruptionBudgetsMasterInfraExtended",
 	"ManuallyCordonedNodes",
 	"ManuallyCordonedNodesExtended",
 	"NodeUnschedulableTaints",
@@ -229,7 +231,8 @@ func (r *ReconcileUpgradePreflightCheck) runChecks(
 		"CriticalAlerts":                  func() upgradev1alpha1.PreflightCheckResult { return r.checkCriticalAlerts(ctx, logger, timeout) },
 		"CriticalAlertsExtended":          func() upgradev1alpha1.PreflightCheckResult { return r.checkCriticalAlertsExtended(ctx, logger, timeout) },
 		"PodDisruptionBudgets":            func() upgradev1alpha1.PreflightCheckResult { return r.checkPodDisruptionBudgets(ctx, logger, timeout) },
-		"PodDisruptionBudgetsExtended":    func() upgradev1alpha1.PreflightCheckResult { return r.checkPodDisruptionBudgetsExtended(ctx, logger, timeout) },
+		"PodDisruptionBudgetsExtended":           func() upgradev1alpha1.PreflightCheckResult { return r.checkPodDisruptionBudgetsExtended(ctx, logger, timeout) },
+		"PodDisruptionBudgetsMasterInfraExtended": func() upgradev1alpha1.PreflightCheckResult { return r.checkPodDisruptionBudgetsMasterInfraExtended(ctx, logger, timeout) },
 		"ManuallyCordonedNodes":           func() upgradev1alpha1.PreflightCheckResult { return r.checkManuallyCordonedNodes(ctx, logger, timeout) },
 		"ManuallyCordonedNodesExtended":   func() upgradev1alpha1.PreflightCheckResult { return r.checkManuallyCordonedNodesExtended(ctx, logger, timeout) },
 		"NodeUnschedulableTaints":         func() upgradev1alpha1.PreflightCheckResult { return r.checkNodeTaints(ctx, logger, timeout) },
@@ -738,6 +741,106 @@ func pdbViolation(pdb policyv1.PodDisruptionBudget) string {
 		}
 	}
 	return ""
+}
+
+func (r *ReconcileUpgradePreflightCheck) checkPodDisruptionBudgetsMasterInfraExtended(
+	ctx context.Context, logger logr.Logger, timeout time.Duration,
+) upgradev1alpha1.PreflightCheckResult {
+	const checkName = "PodDisruptionBudgetsMasterInfraExtended"
+	start := metav1.Now()
+	checkCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	nodeList := &corev1.NodeList{}
+	if err := r.Client.List(checkCtx, nodeList); err != nil {
+		return withTiming(withDesc(errorResult(checkName, fmt.Sprintf("unable to list nodes: %v", err), timeout), descPDBMasterInfra), start, metav1.Now())
+	}
+
+	masterInfraNames := map[string]string{}
+	for _, node := range nodeList.Items {
+		if _, ok := node.Labels["node-role.kubernetes.io/master"]; ok {
+			masterInfraNames[node.Name] = "master"
+		} else if _, ok := node.Labels["node-role.kubernetes.io/infra"]; ok {
+			masterInfraNames[node.Name] = "infra"
+		}
+	}
+
+	podList := &corev1.PodList{}
+	if err := r.Client.List(checkCtx, podList); err != nil {
+		return withTiming(withDesc(errorResult(checkName, fmt.Sprintf("unable to list pods: %v", err), timeout), descPDBMasterInfra), start, metav1.Now())
+	}
+
+	masterInfraPods := []corev1.Pod{}
+	for _, pod := range podList.Items {
+		if _, ok := masterInfraNames[pod.Spec.NodeName]; ok {
+			masterInfraPods = append(masterInfraPods, pod)
+		}
+	}
+
+	pdbList := &policyv1.PodDisruptionBudgetList{}
+	if err := r.Client.List(checkCtx, pdbList); err != nil {
+		return withTiming(withDesc(errorResult(checkName, fmt.Sprintf("unable to list PodDisruptionBudgets: %v", err), timeout), descPDBMasterInfra), start, metav1.Now())
+	}
+
+	var blocking, findings []string
+	for _, pdb := range pdbList.Items {
+		covered := pdbCoveredMasterInfraPods(pdb, masterInfraPods, masterInfraNames)
+		if len(covered) == 0 {
+			continue
+		}
+		key := fmt.Sprintf("%s/%s", pdb.Namespace, pdb.Name)
+		if reason := pdbViolation(pdb); reason != "" {
+			detail := fmt.Sprintf("%s: covers %d pods on master/infra nodes (%s)", key, len(covered), reason)
+			blocking = append(blocking, detail)
+			findings = append(findings, detail)
+		} else {
+			findings = append(findings, fmt.Sprintf("%s: ok (%d pods on master/infra)", key, len(covered)))
+		}
+	}
+
+	if len(blocking) > 0 {
+		return withTiming(withDesc(completedResult(checkName, upgradev1alpha1.CheckFailed,
+			fmt.Sprintf("Found %d restrictive PDB(s) covering pods on %d master/infra node(s)",
+				len(blocking), len(masterInfraNames)),
+			findings, timeout), descPDBMasterInfra), start, metav1.Now())
+	}
+	summary := fmt.Sprintf("Checked %d PDB(s) covering pods on %d master/infra node(s): none blocking",
+		len(findings), len(masterInfraNames))
+	if len(masterInfraNames) == 0 {
+		summary = "No master/infra nodes found"
+	}
+	return withTiming(withDesc(completedResult(checkName, upgradev1alpha1.CheckPassed, summary, findings, timeout), descPDBMasterInfra), start, metav1.Now())
+}
+
+func pdbCoveredMasterInfraPods(pdb policyv1.PodDisruptionBudget, pods []corev1.Pod, nodeRoles map[string]string) []corev1.Pod {
+	if pdb.Spec.Selector == nil {
+		return nil
+	}
+	var covered []corev1.Pod
+	for _, pod := range pods {
+		if pod.Namespace != pdb.Namespace {
+			continue
+		}
+		if _, onMasterInfra := nodeRoles[pod.Spec.NodeName]; !onMasterInfra {
+			continue
+		}
+		if podMatchesPDBSelector(pod, pdb) {
+			covered = append(covered, pod)
+		}
+	}
+	return covered
+}
+
+func podMatchesPDBSelector(pod corev1.Pod, pdb policyv1.PodDisruptionBudget) bool {
+	if pdb.Spec.Selector == nil {
+		return false
+	}
+	for k, v := range pdb.Spec.Selector.MatchLabels {
+		if pod.Labels[k] != v {
+			return false
+		}
+	}
+	return true
 }
 
 func (r *ReconcileUpgradePreflightCheck) checkUpgradeableCondition(
