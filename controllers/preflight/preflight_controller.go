@@ -17,6 +17,7 @@ import (
 	"github.com/openshift/managed-upgrade-operator/pkg/metrics"
 	"github.com/openshift/managed-upgrade-operator/pkg/upgraders"
 	"github.com/openshift/managed-upgrade-operator/util"
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	policyv1 "k8s.io/api/policy/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -57,8 +58,7 @@ const (
 	descClusterOperatorsExtended = "Comprehensive cluster operator health check. Lists all operators with available/degraded conditions and detailed status messages."
 	descCriticalAlertsExtended   = "Detailed critical alert analysis without ignore filters. Lists all firing critical alerts in core OpenShift namespaces (openshift-*, kube-*, default)."
 	descNodeHealthExtended       = "In-depth node health analysis. Shows all worker nodes that are cordoned or have memory, disk, or PID pressure conditions that could block workload scheduling."
-	descPodDisruptionBudgetsExtended = "Comprehensive PDB analysis. Lists all PDBs with MaxUnavailable=0, MaxUnavailable=0%, or MinAvailable=100% configurations that could block node drains."
-	descPDBMasterInfra               = "Identifies PodDisruptionBudgets that could block master or infra node drains. Scans all pods running on master/infra nodes (regardless of namespace) and reports any with restrictive PDBs. Helps detect customer workloads accidentally scheduled on control plane nodes."
+	descPDBMasterInfra = "Identifies PodDisruptionBudgets that could block master or infra node drain during an upgrade. Scans two sources: (1) pods currently running on master/infra nodes, and (2) DaemonSet pod templates that tolerate master/infra taints and will always be present on those nodes. Only flags PDBs that are restrictive (MaxUnavailable=0 or MinAvailable=100%) and are confirmed to cover workloads on those nodes."
 )
 
 var allChecks = []string{
@@ -68,7 +68,6 @@ var allChecks = []string{
 	"CriticalAlerts",
 	"CriticalAlertsExtended",
 	"PodDisruptionBudgets",
-	"PodDisruptionBudgetsExtended",
 	"PodDisruptionBudgetsMasterInfraExtended",
 	"ManuallyCordonedNodes",
 	"ManuallyCordonedNodesExtended",
@@ -230,8 +229,7 @@ func (r *ReconcileUpgradePreflightCheck) runChecks(
 		"ClusterOperatorsExtended":        func() upgradev1alpha1.PreflightCheckResult { return r.checkClusterOperatorsExtended(ctx, logger, timeout) },
 		"CriticalAlerts":                  func() upgradev1alpha1.PreflightCheckResult { return r.checkCriticalAlerts(ctx, logger, timeout) },
 		"CriticalAlertsExtended":          func() upgradev1alpha1.PreflightCheckResult { return r.checkCriticalAlertsExtended(ctx, logger, timeout) },
-		"PodDisruptionBudgets":            func() upgradev1alpha1.PreflightCheckResult { return r.checkPodDisruptionBudgets(ctx, logger, timeout) },
-		"PodDisruptionBudgetsExtended":           func() upgradev1alpha1.PreflightCheckResult { return r.checkPodDisruptionBudgetsExtended(ctx, logger, timeout) },
+		"PodDisruptionBudgets":                    func() upgradev1alpha1.PreflightCheckResult { return r.checkPodDisruptionBudgets(ctx, logger, timeout) },
 		"PodDisruptionBudgetsMasterInfraExtended": func() upgradev1alpha1.PreflightCheckResult { return r.checkPodDisruptionBudgetsMasterInfraExtended(ctx, logger, timeout) },
 		"ManuallyCordonedNodes":           func() upgradev1alpha1.PreflightCheckResult { return r.checkManuallyCordonedNodes(ctx, logger, timeout) },
 		"ManuallyCordonedNodesExtended":   func() upgradev1alpha1.PreflightCheckResult { return r.checkManuallyCordonedNodesExtended(ctx, logger, timeout) },
@@ -690,38 +688,6 @@ func (r *ReconcileUpgradePreflightCheck) checkPodDisruptionBudgets(
 		"Upgrade validation passed: no blocking PDBs", findings, timeout), descPodDisruptionBudgets), start, metav1.Now())
 }
 
-func (r *ReconcileUpgradePreflightCheck) checkPodDisruptionBudgetsExtended(
-	ctx context.Context, logger logr.Logger, timeout time.Duration,
-) upgradev1alpha1.PreflightCheckResult {
-	const checkName = "PodDisruptionBudgetsExtended"
-	start := metav1.Now()
-	checkCtx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-
-	pdbList := &policyv1.PodDisruptionBudgetList{}
-	if err := r.Client.List(checkCtx, pdbList); err != nil {
-		return withTiming(withDesc(errorResult(checkName, fmt.Sprintf("unable to list PodDisruptionBudgets: %v", err), timeout), descPodDisruptionBudgetsExtended), start, metav1.Now())
-	}
-	var bad, findings []string
-	for _, pdb := range pdbList.Items {
-		key := fmt.Sprintf("%s/%s", pdb.Namespace, pdb.Name)
-		if reason := pdbViolation(pdb); reason != "" {
-			bad = append(bad, fmt.Sprintf("%s (%s)", key, reason))
-			findings = append(findings, fmt.Sprintf("%s: BLOCKING — %s", key, reason))
-		} else {
-			findings = append(findings, fmt.Sprintf("%s: ok", key))
-		}
-	}
-	if len(bad) > 0 {
-		return withTiming(withDesc(completedResult(checkName, upgradev1alpha1.CheckFailed,
-			fmt.Sprintf("%d blocking PDB(s) of %d total", len(bad), len(pdbList.Items)),
-			findings, timeout), descPodDisruptionBudgetsExtended), start, metav1.Now())
-	}
-	return withTiming(withDesc(completedResult(checkName, upgradev1alpha1.CheckPassed,
-		fmt.Sprintf("Checked %d PDB(s): none blocking node drains", len(pdbList.Items)),
-		findings, timeout), descPodDisruptionBudgetsExtended), start, metav1.Now())
-}
-
 func pdbViolation(pdb policyv1.PodDisruptionBudget) string {
 	if pdb.Spec.MaxUnavailable != nil {
 		switch pdb.Spec.MaxUnavailable.Type {
@@ -765,11 +731,11 @@ func (r *ReconcileUpgradePreflightCheck) checkPodDisruptionBudgetsMasterInfraExt
 		}
 	}
 
+	// Source 1: pods currently running on master/infra nodes.
 	podList := &corev1.PodList{}
 	if err := r.Client.List(checkCtx, podList); err != nil {
 		return withTiming(withDesc(errorResult(checkName, fmt.Sprintf("unable to list pods: %v", err), timeout), descPDBMasterInfra), start, metav1.Now())
 	}
-
 	masterInfraPods := []corev1.Pod{}
 	for _, pod := range podList.Items {
 		if _, ok := masterInfraNames[pod.Spec.NodeName]; ok {
@@ -777,35 +743,59 @@ func (r *ReconcileUpgradePreflightCheck) checkPodDisruptionBudgetsMasterInfraExt
 		}
 	}
 
+	// Source 2: DaemonSet pod templates that tolerate master/infra taints.
+	// DaemonSets with these tolerations will always place pods on master/infra
+	// nodes regardless of whether pods are currently running.
+	dsList := &appsv1.DaemonSetList{}
+	if err := r.Client.List(checkCtx, dsList); err != nil {
+		return withTiming(withDesc(errorResult(checkName, fmt.Sprintf("unable to list DaemonSets: %v", err), timeout), descPDBMasterInfra), start, metav1.Now())
+	}
+
 	pdbList := &policyv1.PodDisruptionBudgetList{}
 	if err := r.Client.List(checkCtx, pdbList); err != nil {
 		return withTiming(withDesc(errorResult(checkName, fmt.Sprintf("unable to list PodDisruptionBudgets: %v", err), timeout), descPDBMasterInfra), start, metav1.Now())
 	}
 
+	// Track PDBs already flagged to avoid duplicate findings.
+	flagged := map[string]bool{}
 	var blocking, findings []string
+
 	for _, pdb := range pdbList.Items {
-		covered := pdbCoveredMasterInfraPods(pdb, masterInfraPods, masterInfraNames)
-		if len(covered) == 0 {
+		key := fmt.Sprintf("%s/%s", pdb.Namespace, pdb.Name)
+
+		// Check running pods on master/infra nodes.
+		if covered := pdbCoveredMasterInfraPods(pdb, masterInfraPods, masterInfraNames); len(covered) > 0 {
+			flagged[key] = true
+			if reason := pdbViolation(pdb); reason != "" {
+				detail := fmt.Sprintf("%s: covers %d running pods on master/infra nodes (%s)", key, len(covered), reason)
+				blocking = append(blocking, detail)
+				findings = append(findings, detail)
+			} else {
+				findings = append(findings, fmt.Sprintf("%s: ok (%d running pods on master/infra)", key, len(covered)))
+			}
 			continue
 		}
-		key := fmt.Sprintf("%s/%s", pdb.Namespace, pdb.Name)
-		if reason := pdbViolation(pdb); reason != "" {
-			detail := fmt.Sprintf("%s: covers %d pods on master/infra nodes (%s)", key, len(covered), reason)
-			blocking = append(blocking, detail)
-			findings = append(findings, detail)
-		} else {
-			findings = append(findings, fmt.Sprintf("%s: ok (%d pods on master/infra)", key, len(covered)))
+
+		// Check DaemonSets that target master/infra nodes.
+		if ds, matched := pdbMatchesMasterInfraDS(pdb, dsList.Items); matched {
+			flagged[key] = true
+			if reason := pdbViolation(pdb); reason != "" {
+				detail := fmt.Sprintf("%s: covers DaemonSet %s/%s targeting master/infra nodes (%s)", key, ds.Namespace, ds.Name, reason)
+				blocking = append(blocking, detail)
+				findings = append(findings, detail)
+			} else {
+				findings = append(findings, fmt.Sprintf("%s: ok (covers DaemonSet %s/%s targeting master/infra)", key, ds.Namespace, ds.Name))
+			}
 		}
 	}
 
 	if len(blocking) > 0 {
 		return withTiming(withDesc(completedResult(checkName, upgradev1alpha1.CheckFailed,
-			fmt.Sprintf("Found %d restrictive PDB(s) covering pods on %d master/infra node(s)",
+			fmt.Sprintf("Found %d restrictive PDB(s) that could block drain of %d master/infra node(s)",
 				len(blocking), len(masterInfraNames)),
 			findings, timeout), descPDBMasterInfra), start, metav1.Now())
 	}
-	summary := fmt.Sprintf("Checked %d PDB(s) covering pods on %d master/infra node(s): none blocking",
-		len(findings), len(masterInfraNames))
+	summary := fmt.Sprintf("Checked PDBs against %d master/infra node(s): none blocking", len(masterInfraNames))
 	if len(masterInfraNames) == 0 {
 		summary = "No master/infra nodes found"
 	}
@@ -837,6 +827,52 @@ func podMatchesPDBSelector(pod corev1.Pod, pdb policyv1.PodDisruptionBudget) boo
 	}
 	for k, v := range pdb.Spec.Selector.MatchLabels {
 		if pod.Labels[k] != v {
+			return false
+		}
+	}
+	return true
+}
+
+// pdbMatchesMasterInfraDS returns the first DaemonSet whose pod template is covered
+// by the PDB's selector and whose pod template tolerates master or infra taints.
+func pdbMatchesMasterInfraDS(pdb policyv1.PodDisruptionBudget, dsList []appsv1.DaemonSet) (appsv1.DaemonSet, bool) {
+	if pdb.Spec.Selector == nil {
+		return appsv1.DaemonSet{}, false
+	}
+	for _, ds := range dsList {
+		if ds.Namespace != pdb.Namespace {
+			continue
+		}
+		if !dsToleratsMasterOrInfra(ds) {
+			continue
+		}
+		if dsMatchesPDBSelector(ds, pdb) {
+			return ds, true
+		}
+	}
+	return appsv1.DaemonSet{}, false
+}
+
+func dsToleratsMasterOrInfra(ds appsv1.DaemonSet) bool {
+	for _, t := range ds.Spec.Template.Spec.Tolerations {
+		if t.Key == "node-role.kubernetes.io/master" || t.Key == "node-role.kubernetes.io/infra" {
+			return true
+		}
+		// A wildcard toleration (key="", operator=Exists) covers all taints including master/infra.
+		if t.Key == "" && t.Operator == corev1.TolerationOpExists {
+			return true
+		}
+	}
+	return false
+}
+
+func dsMatchesPDBSelector(ds appsv1.DaemonSet, pdb policyv1.PodDisruptionBudget) bool {
+	if pdb.Spec.Selector == nil {
+		return false
+	}
+	podLabels := ds.Spec.Template.Labels
+	for k, v := range pdb.Spec.Selector.MatchLabels {
+		if podLabels[k] != v {
 			return false
 		}
 	}

@@ -15,6 +15,7 @@ import (
 	metricsMocks "github.com/openshift/managed-upgrade-operator/pkg/metrics/mocks"
 	"github.com/openshift/managed-upgrade-operator/util/mocks"
 	"go.uber.org/mock/gomock"
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	policyv1 "k8s.io/api/policy/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -242,9 +243,12 @@ var _ = Describe("PreflightController", func() {
 				// pod list: 1 for PDB master/infra extended check
 				mockClient.EXPECT().List(gomock.Any(), gomock.AssignableToTypeOf(&corev1.PodList{}), gomock.Any()).
 					Return(nil)
-				// PDB list: 1 extended + 1 master/infra extended + 1 baseline (via upgraders.HealthCheckPDB)
+				// daemonset list: 1 for PDB master/infra extended check
+				mockClient.EXPECT().List(gomock.Any(), gomock.AssignableToTypeOf(&appsv1.DaemonSetList{}), gomock.Any()).
+					Return(nil)
+				// PDB list: 1 master/infra extended + 1 baseline (via upgraders.HealthCheckPDB)
 				mockClient.EXPECT().List(gomock.Any(), gomock.AssignableToTypeOf(&policyv1.PodDisruptionBudgetList{}), gomock.Any()).
-					Return(nil).Times(3)
+					Return(nil).Times(2)
 				// baseline PDB DVO check
 				mockDvoClientBuilder.EXPECT().New(gomock.Any()).Return(mockDvoClient, nil)
 				mockDvoClient.EXPECT().GetMetrics().Return([]byte(""), nil)
@@ -342,7 +346,7 @@ var _ = Describe("PreflightController", func() {
 			list := []string{"CriticalAlertsExtended", "ClusterOperatorsExtended"}
 			Expect(checkAllowed("CriticalAlertsExtended", list)).To(BeTrue())
 			Expect(checkAllowed("ClusterOperatorsExtended", list)).To(BeTrue())
-			Expect(checkAllowed("PodDisruptionBudgetsExtended", list)).To(BeFalse())
+			Expect(checkAllowed("PodDisruptionBudgetsMasterInfraExtended", list)).To(BeFalse())
 		})
 	})
 
@@ -778,45 +782,6 @@ var _ = Describe("PreflightController", func() {
 			})
 		})
 
-		Context("checkPodDisruptionBudgetsExtended", func() {
-			It("returns Passed when no blocking PDBs exist", func() {
-				mockClient.EXPECT().List(gomock.Any(), gomock.AssignableToTypeOf(&policyv1.PodDisruptionBudgetList{}), gomock.Any()).
-					Return(nil)
-				result := reconciler.checkPodDisruptionBudgetsExtended(context.TODO(), log, defaultCheckTimeout)
-				Expect(result.Execution.State).To(Equal(upgradev1alpha1.CheckCompleted))
-				Expect(result.Result).To(Equal(upgradev1alpha1.CheckPassed))
-			})
-
-			It("returns Failed for PDBs with MaxUnavailable=0", func() {
-				zero := intstr.FromInt(0)
-				mockClient.EXPECT().List(gomock.Any(), gomock.AssignableToTypeOf(&policyv1.PodDisruptionBudgetList{}), gomock.Any()).
-					DoAndReturn(func(_ context.Context, list interface{}, _ ...interface{}) error {
-						pl, ok := list.(*policyv1.PodDisruptionBudgetList)
-						if !ok {
-							return fmt.Errorf("expected *policyv1.PodDisruptionBudgetList, got %T", list)
-						}
-						pl.Items = []policyv1.PodDisruptionBudget{
-							{
-								ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "strict-pdb"},
-								Spec:       policyv1.PodDisruptionBudgetSpec{MaxUnavailable: &zero},
-							},
-						}
-						return nil
-					})
-				result := reconciler.checkPodDisruptionBudgetsExtended(context.TODO(), log, defaultCheckTimeout)
-				Expect(result.Execution.State).To(Equal(upgradev1alpha1.CheckCompleted))
-				Expect(result.Result).To(Equal(upgradev1alpha1.CheckFailed))
-				Expect(result.Execution.Findings).To(ContainElement(ContainSubstring("strict-pdb")))
-			})
-
-			It("returns Error when PDB list fails", func() {
-				mockClient.EXPECT().List(gomock.Any(), gomock.AssignableToTypeOf(&policyv1.PodDisruptionBudgetList{}), gomock.Any()).
-					Return(fmt.Errorf("list pdb failed"))
-				result := reconciler.checkPodDisruptionBudgetsExtended(context.TODO(), log, defaultCheckTimeout)
-				Expect(result.Execution.State).To(Equal(upgradev1alpha1.CheckError))
-			})
-		})
-
 		Context("checkPodDisruptionBudgetsMasterInfraExtended", func() {
 			masterNode := func(name string) corev1.Node {
 				return corev1.Node{
@@ -843,6 +808,20 @@ var _ = Describe("PreflightController", func() {
 					Spec:       corev1.PodSpec{NodeName: nodeName},
 				}
 			}
+			masterToleration := corev1.Toleration{Key: "node-role.kubernetes.io/master", Operator: corev1.TolerationOpExists, Effect: corev1.TaintEffectNoSchedule}
+			infraToleration := corev1.Toleration{Key: "node-role.kubernetes.io/infra", Operator: corev1.TolerationOpExists, Effect: corev1.TaintEffectNoSchedule}
+			wildcardToleration := corev1.Toleration{Key: "", Operator: corev1.TolerationOpExists}
+			dsWithTolerations := func(namespace, name string, labels map[string]string, tolerations []corev1.Toleration) appsv1.DaemonSet {
+				return appsv1.DaemonSet{
+					ObjectMeta: metav1.ObjectMeta{Namespace: namespace, Name: name},
+					Spec: appsv1.DaemonSetSpec{
+						Template: corev1.PodTemplateSpec{
+							ObjectMeta: metav1.ObjectMeta{Labels: labels},
+							Spec:       corev1.PodSpec{Tolerations: tolerations},
+						},
+					},
+				}
+			}
 
 			It("returns Passed when no master/infra nodes exist", func() {
 				mockClient.EXPECT().List(gomock.Any(), gomock.AssignableToTypeOf(&corev1.NodeList{}), gomock.Any()).
@@ -852,6 +831,7 @@ var _ = Describe("PreflightController", func() {
 						return nil
 					})
 				mockClient.EXPECT().List(gomock.Any(), gomock.AssignableToTypeOf(&corev1.PodList{}), gomock.Any()).Return(nil)
+				mockClient.EXPECT().List(gomock.Any(), gomock.AssignableToTypeOf(&appsv1.DaemonSetList{}), gomock.Any()).Return(nil)
 				mockClient.EXPECT().List(gomock.Any(), gomock.AssignableToTypeOf(&policyv1.PodDisruptionBudgetList{}), gomock.Any()).Return(nil)
 				result := reconciler.checkPodDisruptionBudgetsMasterInfraExtended(context.TODO(), log, defaultCheckTimeout)
 				Expect(result.Execution.State).To(Equal(upgradev1alpha1.CheckCompleted))
@@ -871,13 +851,14 @@ var _ = Describe("PreflightController", func() {
 						pl.Items = []corev1.Pod{podOnNode("openshift-etcd", "etcd-master-1", "master-1", map[string]string{"app": "etcd"})}
 						return nil
 					})
+				mockClient.EXPECT().List(gomock.Any(), gomock.AssignableToTypeOf(&appsv1.DaemonSetList{}), gomock.Any()).Return(nil)
 				mockClient.EXPECT().List(gomock.Any(), gomock.AssignableToTypeOf(&policyv1.PodDisruptionBudgetList{}), gomock.Any()).Return(nil)
 				result := reconciler.checkPodDisruptionBudgetsMasterInfraExtended(context.TODO(), log, defaultCheckTimeout)
 				Expect(result.Execution.State).To(Equal(upgradev1alpha1.CheckCompleted))
 				Expect(result.Result).To(Equal(upgradev1alpha1.CheckPassed))
 			})
 
-			It("returns Failed when a restrictive PDB covers pods on master nodes", func() {
+			It("returns Failed when a restrictive PDB covers running pods on master nodes", func() {
 				zero := intstr.FromInt(0)
 				mockClient.EXPECT().List(gomock.Any(), gomock.AssignableToTypeOf(&corev1.NodeList{}), gomock.Any()).
 					DoAndReturn(func(_ context.Context, list interface{}, _ ...interface{}) error {
@@ -891,6 +872,7 @@ var _ = Describe("PreflightController", func() {
 						pl.Items = []corev1.Pod{podOnNode("customer-ns", "app-pod", "master-1", map[string]string{"app": "myapp"})}
 						return nil
 					})
+				mockClient.EXPECT().List(gomock.Any(), gomock.AssignableToTypeOf(&appsv1.DaemonSetList{}), gomock.Any()).Return(nil)
 				mockClient.EXPECT().List(gomock.Any(), gomock.AssignableToTypeOf(&policyv1.PodDisruptionBudgetList{}), gomock.Any()).
 					DoAndReturn(func(_ context.Context, list interface{}, _ ...interface{}) error {
 						pl := list.(*policyv1.PodDisruptionBudgetList)
@@ -925,6 +907,7 @@ var _ = Describe("PreflightController", func() {
 						return nil
 					})
 				one := intstr.FromInt(1)
+				mockClient.EXPECT().List(gomock.Any(), gomock.AssignableToTypeOf(&appsv1.DaemonSetList{}), gomock.Any()).Return(nil)
 				mockClient.EXPECT().List(gomock.Any(), gomock.AssignableToTypeOf(&policyv1.PodDisruptionBudgetList{}), gomock.Any()).
 					DoAndReturn(func(_ context.Context, list interface{}, _ ...interface{}) error {
 						pl := list.(*policyv1.PodDisruptionBudgetList)
@@ -943,6 +926,141 @@ var _ = Describe("PreflightController", func() {
 				Expect(result.Execution.State).To(Equal(upgradev1alpha1.CheckCompleted))
 				Expect(result.Result).To(Equal(upgradev1alpha1.CheckPassed))
 				Expect(result.Execution.Findings).To(ContainElement(ContainSubstring("logging-pdb")))
+			})
+
+			It("returns Failed when a restrictive PDB covers a DaemonSet targeting master nodes", func() {
+				zero := intstr.FromInt(0)
+				mockClient.EXPECT().List(gomock.Any(), gomock.AssignableToTypeOf(&corev1.NodeList{}), gomock.Any()).
+					DoAndReturn(func(_ context.Context, list interface{}, _ ...interface{}) error {
+						nl := list.(*corev1.NodeList)
+						nl.Items = []corev1.Node{masterNode("master-1")}
+						return nil
+					})
+				mockClient.EXPECT().List(gomock.Any(), gomock.AssignableToTypeOf(&corev1.PodList{}), gomock.Any()).Return(nil)
+				mockClient.EXPECT().List(gomock.Any(), gomock.AssignableToTypeOf(&appsv1.DaemonSetList{}), gomock.Any()).
+					DoAndReturn(func(_ context.Context, list interface{}, _ ...interface{}) error {
+						dl := list.(*appsv1.DaemonSetList)
+						dl.Items = []appsv1.DaemonSet{
+							dsWithTolerations("openshift-monitoring", "node-exporter", map[string]string{"app": "node-exporter"}, []corev1.Toleration{masterToleration}),
+						}
+						return nil
+					})
+				mockClient.EXPECT().List(gomock.Any(), gomock.AssignableToTypeOf(&policyv1.PodDisruptionBudgetList{}), gomock.Any()).
+					DoAndReturn(func(_ context.Context, list interface{}, _ ...interface{}) error {
+						pl := list.(*policyv1.PodDisruptionBudgetList)
+						pl.Items = []policyv1.PodDisruptionBudget{
+							{
+								ObjectMeta: metav1.ObjectMeta{Namespace: "openshift-monitoring", Name: "node-exporter-pdb"},
+								Spec: policyv1.PodDisruptionBudgetSpec{
+									MaxUnavailable: &zero,
+									Selector:       &metav1.LabelSelector{MatchLabels: map[string]string{"app": "node-exporter"}},
+								},
+							},
+						}
+						return nil
+					})
+				result := reconciler.checkPodDisruptionBudgetsMasterInfraExtended(context.TODO(), log, defaultCheckTimeout)
+				Expect(result.Execution.State).To(Equal(upgradev1alpha1.CheckCompleted))
+				Expect(result.Result).To(Equal(upgradev1alpha1.CheckFailed))
+				Expect(result.Execution.Findings).To(ContainElement(ContainSubstring("node-exporter-pdb")))
+				Expect(result.Execution.Findings).To(ContainElement(ContainSubstring("node-exporter")))
+			})
+
+			It("returns Failed when a restrictive PDB covers a DaemonSet with infra toleration", func() {
+				zero := intstr.FromInt(0)
+				mockClient.EXPECT().List(gomock.Any(), gomock.AssignableToTypeOf(&corev1.NodeList{}), gomock.Any()).Return(nil)
+				mockClient.EXPECT().List(gomock.Any(), gomock.AssignableToTypeOf(&corev1.PodList{}), gomock.Any()).Return(nil)
+				mockClient.EXPECT().List(gomock.Any(), gomock.AssignableToTypeOf(&appsv1.DaemonSetList{}), gomock.Any()).
+					DoAndReturn(func(_ context.Context, list interface{}, _ ...interface{}) error {
+						dl := list.(*appsv1.DaemonSetList)
+						dl.Items = []appsv1.DaemonSet{
+							dsWithTolerations("openshift-logging", "fluentd", map[string]string{"app": "fluentd"}, []corev1.Toleration{infraToleration}),
+						}
+						return nil
+					})
+				mockClient.EXPECT().List(gomock.Any(), gomock.AssignableToTypeOf(&policyv1.PodDisruptionBudgetList{}), gomock.Any()).
+					DoAndReturn(func(_ context.Context, list interface{}, _ ...interface{}) error {
+						pl := list.(*policyv1.PodDisruptionBudgetList)
+						pl.Items = []policyv1.PodDisruptionBudget{
+							{
+								ObjectMeta: metav1.ObjectMeta{Namespace: "openshift-logging", Name: "fluentd-pdb"},
+								Spec: policyv1.PodDisruptionBudgetSpec{
+									MaxUnavailable: &zero,
+									Selector:       &metav1.LabelSelector{MatchLabels: map[string]string{"app": "fluentd"}},
+								},
+							},
+						}
+						return nil
+					})
+				result := reconciler.checkPodDisruptionBudgetsMasterInfraExtended(context.TODO(), log, defaultCheckTimeout)
+				Expect(result.Execution.State).To(Equal(upgradev1alpha1.CheckCompleted))
+				Expect(result.Result).To(Equal(upgradev1alpha1.CheckFailed))
+				Expect(result.Execution.Findings).To(ContainElement(ContainSubstring("fluentd-pdb")))
+			})
+
+			It("returns Failed when a DaemonSet with wildcard toleration is covered by a restrictive PDB", func() {
+				zero := intstr.FromInt(0)
+				mockClient.EXPECT().List(gomock.Any(), gomock.AssignableToTypeOf(&corev1.NodeList{}), gomock.Any()).Return(nil)
+				mockClient.EXPECT().List(gomock.Any(), gomock.AssignableToTypeOf(&corev1.PodList{}), gomock.Any()).Return(nil)
+				mockClient.EXPECT().List(gomock.Any(), gomock.AssignableToTypeOf(&appsv1.DaemonSetList{}), gomock.Any()).
+					DoAndReturn(func(_ context.Context, list interface{}, _ ...interface{}) error {
+						dl := list.(*appsv1.DaemonSetList)
+						dl.Items = []appsv1.DaemonSet{
+							dsWithTolerations("kube-system", "kube-proxy", map[string]string{"app": "kube-proxy"}, []corev1.Toleration{wildcardToleration}),
+						}
+						return nil
+					})
+				mockClient.EXPECT().List(gomock.Any(), gomock.AssignableToTypeOf(&policyv1.PodDisruptionBudgetList{}), gomock.Any()).
+					DoAndReturn(func(_ context.Context, list interface{}, _ ...interface{}) error {
+						pl := list.(*policyv1.PodDisruptionBudgetList)
+						pl.Items = []policyv1.PodDisruptionBudget{
+							{
+								ObjectMeta: metav1.ObjectMeta{Namespace: "kube-system", Name: "kube-proxy-pdb"},
+								Spec: policyv1.PodDisruptionBudgetSpec{
+									MaxUnavailable: &zero,
+									Selector:       &metav1.LabelSelector{MatchLabels: map[string]string{"app": "kube-proxy"}},
+								},
+							},
+						}
+						return nil
+					})
+				result := reconciler.checkPodDisruptionBudgetsMasterInfraExtended(context.TODO(), log, defaultCheckTimeout)
+				Expect(result.Execution.State).To(Equal(upgradev1alpha1.CheckCompleted))
+				Expect(result.Result).To(Equal(upgradev1alpha1.CheckFailed))
+				Expect(result.Execution.Findings).To(ContainElement(ContainSubstring("kube-proxy-pdb")))
+			})
+
+			It("does not flag a DaemonSet with no master/infra tolerations", func() {
+				workerOnlyToleration := corev1.Toleration{Key: "node-role.kubernetes.io/worker", Operator: corev1.TolerationOpExists}
+				mockClient.EXPECT().List(gomock.Any(), gomock.AssignableToTypeOf(&corev1.NodeList{}), gomock.Any()).Return(nil)
+				mockClient.EXPECT().List(gomock.Any(), gomock.AssignableToTypeOf(&corev1.PodList{}), gomock.Any()).Return(nil)
+				mockClient.EXPECT().List(gomock.Any(), gomock.AssignableToTypeOf(&appsv1.DaemonSetList{}), gomock.Any()).
+					DoAndReturn(func(_ context.Context, list interface{}, _ ...interface{}) error {
+						dl := list.(*appsv1.DaemonSetList)
+						dl.Items = []appsv1.DaemonSet{
+							dsWithTolerations("customer-ns", "worker-ds", map[string]string{"app": "worker-app"}, []corev1.Toleration{workerOnlyToleration}),
+						}
+						return nil
+					})
+				zero := intstr.FromInt(0)
+				mockClient.EXPECT().List(gomock.Any(), gomock.AssignableToTypeOf(&policyv1.PodDisruptionBudgetList{}), gomock.Any()).
+					DoAndReturn(func(_ context.Context, list interface{}, _ ...interface{}) error {
+						pl := list.(*policyv1.PodDisruptionBudgetList)
+						pl.Items = []policyv1.PodDisruptionBudget{
+							{
+								ObjectMeta: metav1.ObjectMeta{Namespace: "customer-ns", Name: "worker-pdb"},
+								Spec: policyv1.PodDisruptionBudgetSpec{
+									MaxUnavailable: &zero,
+									Selector:       &metav1.LabelSelector{MatchLabels: map[string]string{"app": "worker-app"}},
+								},
+							},
+						}
+						return nil
+					})
+				result := reconciler.checkPodDisruptionBudgetsMasterInfraExtended(context.TODO(), log, defaultCheckTimeout)
+				Expect(result.Execution.State).To(Equal(upgradev1alpha1.CheckCompleted))
+				Expect(result.Result).To(Equal(upgradev1alpha1.CheckPassed))
+				Expect(result.Execution.Findings).NotTo(ContainElement(ContainSubstring("worker-pdb")))
 			})
 
 			It("returns Error when node list fails", func() {
@@ -965,6 +1083,16 @@ var _ = Describe("PreflightController", func() {
 				result := reconciler.checkPodDisruptionBudgetsMasterInfraExtended(context.TODO(), log, defaultCheckTimeout)
 				Expect(result.Execution.State).To(Equal(upgradev1alpha1.CheckError))
 				Expect(result.Execution.Error).To(ContainSubstring("list pods failed"))
+			})
+
+			It("returns Error when DaemonSet list fails", func() {
+				mockClient.EXPECT().List(gomock.Any(), gomock.AssignableToTypeOf(&corev1.NodeList{}), gomock.Any()).Return(nil)
+				mockClient.EXPECT().List(gomock.Any(), gomock.AssignableToTypeOf(&corev1.PodList{}), gomock.Any()).Return(nil)
+				mockClient.EXPECT().List(gomock.Any(), gomock.AssignableToTypeOf(&appsv1.DaemonSetList{}), gomock.Any()).
+					Return(fmt.Errorf("list daemonsets failed"))
+				result := reconciler.checkPodDisruptionBudgetsMasterInfraExtended(context.TODO(), log, defaultCheckTimeout)
+				Expect(result.Execution.State).To(Equal(upgradev1alpha1.CheckError))
+				Expect(result.Execution.Error).To(ContainSubstring("list daemonsets failed"))
 			})
 		})
 
