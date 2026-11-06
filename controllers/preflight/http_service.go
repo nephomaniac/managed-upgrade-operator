@@ -44,6 +44,10 @@ type CheckRequest struct {
 	CheckTimeoutSeconds int32    `json:"checkTimeoutSeconds,omitempty"`
 	ChecksToRun         []string `json:"checksToRun,omitempty"`
 	Description         string   `json:"description,omitempty"`
+	// NamePrefix sets a custom prefix for the generated UpgradePreflightCheck CR name.
+	// Must be a valid DNS label segment (lowercase alphanumeric and hyphens, no leading/trailing hyphens).
+	// Defaults to "upgradecheck" if empty or invalid.
+	NamePrefix string `json:"namePrefix,omitempty"`
 }
 
 // CheckResponse is the body returned by GET /api/v1/preflight-checks/{id}.
@@ -431,6 +435,23 @@ func (s *PreflightHTTPServer) findCR(ctx context.Context, requestID string) (*up
 	return &list.Items[0], nil
 }
 
+// crNamePrefix returns a sanitized GenerateName value from the caller-supplied prefix.
+// Only lowercase alphanumeric characters and interior hyphens are kept; leading/trailing
+// hyphens are stripped. Falls back to "upgradecheck" if the result is empty.
+func crNamePrefix(raw string) string {
+	var b strings.Builder
+	for _, r := range strings.ToLower(raw) {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' {
+			b.WriteRune(r)
+		}
+	}
+	prefix := strings.Trim(b.String(), "-")
+	if prefix == "" {
+		prefix = "upgradecheck"
+	}
+	return prefix + "-"
+}
+
 func (s *PreflightHTTPServer) buildInternalCR(requestID string, req CheckRequest) *upgradev1alpha1.UpgradePreflightCheck {
 	annotations := map[string]string{
 		// Auto-delete after 24 hours to prevent resource buildup
@@ -441,7 +462,7 @@ func (s *PreflightHTTPServer) buildInternalCR(requestID string, req CheckRequest
 	}
 	return &upgradev1alpha1.UpgradePreflightCheck{
 		ObjectMeta: metav1.ObjectMeta{
-			GenerateName: "upgradecheck-",
+			GenerateName: crNamePrefix(req.NamePrefix),
 			Namespace:    s.Namespace,
 			Labels:       map[string]string{requestIDLabel: requestID},
 			Annotations:  annotations,
@@ -485,16 +506,14 @@ func buildResponse(requestID string, cr *upgradev1alpha1.UpgradePreflightCheck) 
 		switch c.Execution.State {
 		case upgradev1alpha1.CheckCompleted:
 			resp.ChecksCompleted++
-			if c.Result != nil {
-				r.Status = strings.ToLower(string(c.Result.Verdict))
-				r.Message = c.Result.Message
-				r.Details = c.Result.Details
-				if c.Result.Verdict == upgradev1alpha1.CheckFailed {
-					resp.ChecksFailed++
-					anyBad = true
-				} else {
-					resp.ChecksPassed++
-				}
+			r.Status = strings.ToLower(string(c.Result))
+			r.Message = c.Execution.Summary
+			r.Details = c.Execution.Findings
+			if c.Result == upgradev1alpha1.CheckFailed {
+				resp.ChecksFailed++
+				anyBad = true
+			} else {
+				resp.ChecksPassed++
 			}
 		case upgradev1alpha1.CheckError:
 			resp.ChecksErrored++

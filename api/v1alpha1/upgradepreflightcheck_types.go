@@ -12,17 +12,14 @@ type UpgradePreflightCheckSpec struct {
 	UpgradeConfigSpec `json:",inline"`
 
 	// CheckTimeoutSeconds is the maximum number of seconds each individual check
-	// may run before it is cancelled and recorded as State=Error.
+	// may run before it is cancelled and recorded as Result=Error.
 	// Defaults to 30 seconds.
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:default=30
 	CheckTimeoutSeconds int32 `json:"checkTimeoutSeconds,omitempty"`
 
 	// Checks is an optional allowlist of check names to run. When empty, all checks run.
-	// Checks not in this list are recorded with State=Skipped.
-	// Valid names: ClusterVersion, CriticalAlerts, ClusterOperators,
-	//              ManuallyCordonedNodes, NodeUnschedulableTaints, PodDisruptionBudgets,
-	//              UpgradeableCondition, PullSecretValid, AdminAcks
+	// Checks not in this list are recorded with Result=Skipped.
 	// +kubebuilder:validation:Optional
 	Checks []string `json:"checks,omitempty"`
 }
@@ -32,7 +29,7 @@ type UpgradePreflightCheckSpec struct {
 type CheckExecutionState string
 
 const (
-	// CheckCompleted means the check ran to completion; see Result for findings.
+	// CheckCompleted means the check ran to completion; see Result for the health verdict.
 	CheckCompleted CheckExecutionState = "Completed"
 	// CheckError means the check could not run due to an infrastructure or transient error.
 	CheckError CheckExecutionState = "Error"
@@ -40,66 +37,76 @@ const (
 	CheckSkipped CheckExecutionState = "Skipped"
 )
 
-// CheckExecution describes whether the check machinery ran successfully.
+// CheckResult is the top-level health verdict for a preflight check.
+// +kubebuilder:validation:Enum={"Passed","Failed","Error","Skipped","Unknown"}
+type CheckResult string
+
+const (
+	// CheckPassed means the cluster is healthy for this check dimension.
+	CheckPassed CheckResult = "Passed"
+	// CheckFailed means the cluster has a health issue that may block an upgrade.
+	CheckFailed CheckResult = "Failed"
+	// CheckError means the check could not determine cluster health (infrastructure/transient failure).
+	CheckResultError CheckResult = "Error"
+	// CheckResultSkipped means the check was not run (excluded by the Checks allowlist).
+	CheckResultSkipped CheckResult = "Skipped"
+	// CheckResultUnknown is the initial state before a check has run.
+	CheckResultUnknown CheckResult = "Unknown"
+)
+
+// CheckExecution describes the runtime execution of a single preflight check.
 type CheckExecution struct {
-	// State is the execution outcome: Completed, Error, or Skipped.
+	// State is whether the check machinery ran successfully: Completed, Error, or Skipped.
 	State CheckExecutionState `json:"state"`
-	// Message is a concise human-readable summary of what the check found.
+
+	// StartedAt is when this individual check began executing.
 	// +kubebuilder:validation:Optional
-	Message string `json:"message,omitempty"`
-	// Details contains per-item information (e.g. all operator statuses, all PDB specs, all node names).
+	StartedAt *metav1.Time `json:"startedAt,omitempty"`
+
+	// CompletedAt is when this individual check finished executing.
 	// +kubebuilder:validation:Optional
-	Details []string `json:"details,omitempty"`
+	CompletedAt *metav1.Time `json:"completedAt,omitempty"`
+
+	// Summary is a concise human-readable explanation of what the check found.
+	// Examples:
+	//   Passed: "All 34 cluster operators healthy"
+	//   Failed: "2 degraded operators found"
+	//   Error:  "" (see Error field instead)
+	// +kubebuilder:validation:Optional
+	Summary string `json:"summary,omitempty"`
+
+	// Findings contains detailed per-item observations from the check.
+	// Examples:
+	//   Passed: ["authentication: Available=True, Degraded=False", ...]
+	//   Failed: ["kube-apiserver: Degraded=True", "etcd: Degraded=True"]
+	//   Error:  []
+	// +kubebuilder:validation:Optional
+	Findings []string `json:"findings,omitempty"`
+
 	// Error contains the reason a check could not run (State=Error only).
 	// This is an infrastructure/transient failure, not a cluster health finding.
 	// +kubebuilder:validation:Optional
 	Error string `json:"error,omitempty"`
-	// StartedAt is when this individual check began executing.
-	// +kubebuilder:validation:Optional
-	StartedAt *metav1.Time `json:"startedAt,omitempty"`
-	// CompletedAt is when this individual check finished executing.
-	// +kubebuilder:validation:Optional
-	CompletedAt *metav1.Time `json:"completedAt,omitempty"`
-	// TimeoutSeconds is the timeout applied to this check.
-	// +kubebuilder:validation:Optional
-	TimeoutSeconds int32 `json:"timeoutSeconds,omitempty"`
 }
 
-// CheckVerdict is the health verdict when a check completes successfully.
-// +kubebuilder:validation:Enum={"Passed","Failed"}
-type CheckVerdict string
-
-const (
-	CheckPassed CheckVerdict = "Passed"
-	CheckFailed CheckVerdict = "Failed"
-)
-
-// CheckFinding describes what a completed check found about cluster health.
-// Only present when CheckExecution.State=Completed.
-type CheckFinding struct {
-	// Verdict is Passed if the cluster is healthy for this check, Failed otherwise.
-	Verdict CheckVerdict `json:"verdict"`
-	// Message is a human-readable summary of the finding (present on Failed).
-	// +kubebuilder:validation:Optional
-	Message string `json:"message,omitempty"`
-	// Details contains per-item findings (e.g. individual alert names, node names).
-	// Structured for tooling; parse with jq/yq via .result.details[].
-	// +kubebuilder:validation:Optional
-	Details []string `json:"details,omitempty"`
-}
-
-// PreflightCheckResult holds the execution state and finding for a single preflight check.
+// PreflightCheckResult holds the result and execution details for a single preflight check.
 type PreflightCheckResult struct {
 	// Name identifies the check (e.g. "CriticalAlerts", "ClusterOperators").
 	Name string `json:"name"`
+
 	// Description is a human-readable explanation of what this check validates and why it matters.
 	// +kubebuilder:validation:Optional
 	Description string `json:"description,omitempty"`
-	// Execution describes whether the check ran successfully.
+
+	// Result is the health verdict: Passed, Failed, Error, Skipped, or Unknown.
+	// This is the top-level signal — no need to inspect Execution to determine check outcome.
+	Result CheckResult `json:"result"`
+
+	// TimeoutSeconds is the timeout that was applied to this check.
+	TimeoutSeconds int32 `json:"timeoutSeconds"`
+
+	// Execution contains runtime information about how the check ran.
 	Execution CheckExecution `json:"execution"`
-	// Result contains the health finding. Only present when Execution.State=Completed.
-	// +kubebuilder:validation:Optional
-	Result *CheckFinding `json:"result,omitempty"`
 }
 
 // UpgradePreflightCheckStatus reports the outcome of all checks.
@@ -123,7 +130,6 @@ type UpgradePreflightCheckStatus struct {
 
 // UpgradePreflightCheck is the Schema for on-demand cluster upgrade readiness checks.
 // Creating one runs pre-upgrade health checks without scheduling or starting an upgrade.
-// Checks are currently platform-agnostic; type- and version-aware checks are planned.
 type UpgradePreflightCheck struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
