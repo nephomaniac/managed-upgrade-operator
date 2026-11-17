@@ -1,10 +1,10 @@
 # MUO Agent Handoff — Full Context Restore
 
 **Date:** 2026-11-12 (last updated by remote agent)
-**Branch:** `maclark/check-pattern-refactor`
+**Branch:** `<your-branch-name>`
 **Latest commit:** `9184f70`
-**Remote agent fork:** `rosa-agent/managed-upgrade-operator`  
-**Local agent fork:** `nephomaniac/managed-upgrade-operator`  
+**Remote agent fork:** `<remote-fork>/managed-upgrade-operator`  
+**Local agent fork:** `<your-fork>/managed-upgrade-operator`  
 **Upstream (read-only reference):** `openshift/managed-upgrade-operator`
 
 ---
@@ -26,8 +26,8 @@
 
 | Agent | Where | Role |
 |-------|-------|------|
-| **Remote agent** (this sandbox) | `/sandbox/muo-workspace/` | Writes Go/TS code, commits, pushes to `rosa-agent` fork |
-| **Local agent** (maclark's machine) | Clone of `nephomaniac` fork | Pulls from `rosa-agent`, builds images, deploys to cluster, tests, writes results to `/sandbox/ai-status/` |
+| **Remote agent** (this sandbox) | `/sandbox/muo-workspace/` | Writes Go/TS code, commits, pushes to remote fork |
+| **Local agent** (local machine) | Clone of your fork | Pulls from remote, builds images, deploys to cluster, tests, writes results to `/sandbox/ai-status/` |
 
 **Communication:** Local agent drops status files in `/sandbox/ai-status/`. Remote agent reads them between coding sessions.
 
@@ -37,10 +37,10 @@
 
 | Resource | Value |
 |----------|-------|
-| Cluster console | `console-openshift-console.apps.maclarkstg1102.3e6y.s1.devshift.org` |
+| Cluster console | `console-openshift-console.apps.<cluster-name>.s1.devshift.org` |
 | MUO operator namespace | `openshift-managed-upgrade-operator` |
-| Operator image registry | `quay.io/maclark/managed-upgrade-operator:<TAG>` |
-| Plugin image registry | `quay.io/maclark/muo-pko:<TAG>` (the PKO bundle image) |
+| Operator image registry | `quay.io/<your-username>/managed-upgrade-operator:<TAG>` |
+| Plugin image registry | `quay.io/<your-username>/muo-pko:<TAG>` (the PKO bundle image) |
 | PKO resource | `ClusterPackage/managed-upgrade-operator` |
 
 ---
@@ -48,17 +48,17 @@
 ## Repository Setup (remote agent)
 
 ```bash
-git clone "https://x-access-token:${GH_TOKEN}@github.com/rosa-agent/managed-upgrade-operator.git" muo-workspace
+git clone "https://x-access-token:${GH_TOKEN}@github.com/<remote-fork>/managed-upgrade-operator.git" muo-workspace
 cd muo-workspace
-git checkout maclark/check-pattern-refactor
-git config user.email "rosa-agent@redhat.com"
-git config user.name "rosa-agent"
+git checkout <your-branch-name>
+git config user.email "<your-email>"
+git config user.name "<your-name>"
 ```
 
 Push after changes:
 ```bash
-git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/rosa-agent/managed-upgrade-operator.git"
-git push origin maclark/check-pattern-refactor
+git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/<remote-fork>/managed-upgrade-operator.git"
+git push origin <your-branch-name>
 ```
 
 ---
@@ -394,20 +394,20 @@ is pending — the separation established in this branch is the correct boundary
 ## Build Instructions (local agent)
 
 ```bash
-cd /path/to/muo-workspace   # cloned from nephomaniac or rosa-agent fork
+cd /path/to/muo-workspace   # cloned from your fork
 
-# 1. Sync latest from rosa-agent
-git remote add rosa-agent https://github.com/rosa-agent/managed-upgrade-operator.git 2>/dev/null || true
-git fetch rosa-agent
-git checkout maclark/check-pattern-refactor
-git merge rosa-agent/maclark/check-pattern-refactor --ff-only
+# 1. Sync latest from remote fork
+git remote add remote-fork https://github.com/<remote-fork>/managed-upgrade-operator.git 2>/dev/null || true
+git fetch remote-fork
+git checkout <your-branch-name>
+git merge remote-fork/<your-branch-name> --ff-only
 
 # 2. Set image tag
 TAG="upgradestatus-$(date +%m%d%H%M)"
 
 # 3. Build operator image (contains both main MUO binary and upgradediags binary)
-podman build -f build/Dockerfile -t quay.io/maclark/managed-upgrade-operator:$TAG .
-podman push quay.io/maclark/managed-upgrade-operator:$TAG
+podman build -f build/Dockerfile -t quay.io/<your-username>/managed-upgrade-operator:$TAG .
+podman push quay.io/<your-username>/managed-upgrade-operator:$TAG
 
 # 4. Build PKO bundle image
 # PKO bundle = OCI image whose layers are the deploy_pko/ manifest files
@@ -417,8 +417,8 @@ cat > /tmp/pko-build/Dockerfile <<'EOF'
 FROM scratch
 COPY . /package/
 EOF
-podman build -t quay.io/maclark/muo-pko:$TAG /tmp/pko-build/
-podman push quay.io/maclark/muo-pko:$TAG
+podman build -t quay.io/<your-username>/muo-pko:$TAG /tmp/pko-build/
+podman push quay.io/<your-username>/muo-pko:$TAG
 
 echo "Built TAG=$TAG — use this in deploy step"
 ```
@@ -445,10 +445,10 @@ kind: ClusterPackage
 metadata:
   name: managed-upgrade-operator
 spec:
-  image: quay.io/maclark/muo-pko:$TAG
+  image: quay.io/<your-username>/muo-pko:$TAG
   config:
-    image: quay.io/maclark/managed-upgrade-operator:$TAG
-    pluginImage: quay.io/maclark/managed-upgrade-operator:$TAG
+    image: quay.io/<your-username>/managed-upgrade-operator:$TAG
+    pluginImage: quay.io/<your-username>/managed-upgrade-operator:$TAG
 EOF
 
 # 7. Watch rollout (should reach Available=True in ~3 minutes)
@@ -526,7 +526,7 @@ kill $PF_PID
 
 ### Test C: Console Plugin — Upgrade Diagnostics page
 
-1. Open `console-openshift-console.apps.maclarkstg1102.3e6y.s1.devshift.org`
+1. Open `console-openshift-console.apps.<cluster-name>.s1.devshift.org`
 2. Navigate to **Administration → Upgrade Diagnostics**
 3. Verify table loads (may be empty if no checks run yet)
 4. Click **Run New Diagnostics**

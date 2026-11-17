@@ -57,11 +57,11 @@ git clone git@github.com:openshift/managed-upgrade-operator.git
 cd managed-upgrade-operator
 
 # Add the author's fork as remote
-git remote add nephomaniac git@github.com:nephomaniac/managed-upgrade-operator.git
+git remote add nephomaniac git@github.com:<your-fork>/managed-upgrade-operator.git
 git fetch nephomaniac
 
 # Checkout the PR branch
-gh pr checkout 1 --repo nephomaniac/managed-upgrade-operator
+gh pr checkout 1 --repo <your-fork>/managed-upgrade-operator
 
 # Or manually:
 git checkout -b pr-1-test nephomaniac/pr-1-latest
@@ -70,18 +70,18 @@ git checkout -b pr-1-test nephomaniac/pr-1-latest
 ### Option 2: Checkout Our Fixed Branch (Recommended)
 ```bash
 cd ~/sandbox
-git clone git@github.com:nephomaniac/managed-upgrade-operator.git
+git clone git@github.com:<your-fork>/managed-upgrade-operator.git
 cd managed-upgrade-operator
 
 # Checkout our branch with all fixes
-git checkout maclark/fix-preflight-http-service
+git checkout <your-branch-name>
 
 # Verify you're on the correct branch
 git branch -v
 git log --oneline -5
 ```
 
-**Expected commits on `maclark/fix-preflight-http-service`:**
+**Expected commits on `<your-branch-name>`:**
 - `2a5f29b` - chore: increase max active preflight checks from 2 to 10
 - `ec662b4` - feat: warn when PreflightController feature gate is disabled
 - `4bc04ad` - feat: add resource management to prevent CR buildup
@@ -758,8 +758,8 @@ curl -k -X POST https://localhost:8443/api/v1/preflight-checks \
 
 ## Additional Resources
 
-- **PR #1 (original)**: https://github.com/nephomaniac/managed-upgrade-operator/pull/1
-- **Our fixes branch**: https://github.com/nephomaniac/managed-upgrade-operator/tree/maclark/fix-preflight-http-service
+- **PR #1 (original)**: https://github.com/<your-fork>/managed-upgrade-operator/pull/1
+- **Our fixes branch**: https://github.com/<your-fork>/managed-upgrade-operator/tree/<your-branch-name>
 - **Design docs**: See `/sandbox/memory/project_preflight_http_service.md`
 - **Session notes**: See memory files in `.claude/projects/.../memory/`
 
