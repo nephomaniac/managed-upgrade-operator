@@ -7,12 +7,6 @@ metadata:
     package-operator.run/collision-protection: IfNoController
 spec:
   displayName: "Upgrade Diagnostics"
-  accessReview:
-    required:
-    - group: upgrade.managed.openshift.io
-      resource: upgradediagschecks
-      verb: list
-      namespace: openshift-managed-upgrade-operator
   backend:
     type: Service
     service:

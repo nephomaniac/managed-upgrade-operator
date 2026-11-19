@@ -119,6 +119,7 @@ func (s *UpgradeDiagsHTTPServer) Start(ctx context.Context) error {
 	mux.HandleFunc("/api/v1/upgrade-diags/", s.route)
 	mux.HandleFunc("/api/v1/upgrade-status", s.routeStatus)
 	mux.HandleFunc("/api/v1/upgrade-status/", s.routeStatus)
+	mux.HandleFunc("/api/v1/available-versions", s.routeAvailableVersions)
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
 
 	srv := &http.Server{
@@ -672,4 +673,28 @@ func envOr(key, def string) string {
 		return v
 	}
 	return def
+}
+
+// routeAvailableVersions dispatches to handleAvailableVersions (GET only).
+func (s *UpgradeDiagsHTTPServer) routeAvailableVersions(w http.ResponseWriter, r *http.Request) {
+	defer func() {
+		if p := recover(); p != nil {
+			s.Logger.Error(fmt.Errorf("%v", p), "panic in available versions handler",
+				"method", r.Method, "path", r.URL.Path)
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+		}
+	}()
+
+	token := extractBearerToken(r)
+	if token == "" {
+		http.Error(w, "Authorization: Bearer <token> required", http.StatusUnauthorized)
+		return
+	}
+
+	if r.Method == http.MethodGet {
+		s.handleAvailableVersions(w, r, token)
+		return
+	}
+
+	http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 }

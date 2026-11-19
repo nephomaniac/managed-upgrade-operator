@@ -3,13 +3,15 @@ import {
   Button, Form, FormGroup, FormSelect, FormSelectOption,
   FormHelperText, HelperText, HelperTextItem, TextInput, Spinner,
 } from '@patternfly/react-core';
-import { TimesIcon } from '@patternfly/react-icons';
+import { TimesIcon, SyncIcon } from '@patternfly/react-icons';
 import { consoleFetch, useK8sWatchResource, type K8sResourceCommon } from '@openshift-console/dynamic-plugin-sdk';
 
 // MUO's HTTP service creates the CR using the operator's service account,
 // bypassing the sre-regular-user-validation admission webhook.
 const UPGRADEDIAGS_API = '/api/proxy/plugin/managed-upgrade-operator/muo-api/api/v1/upgrade-diags';
+const AVAILABLE_VERSIONS_API = '/api/proxy/plugin/managed-upgrade-operator/muo-api/api/v1/available-versions';
 const MUO_NS = 'openshift-managed-upgrade-operator';
+const VERSION_CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
 
 const T = {
   danger:      'var(--pf-t--global--color--status--danger--default)',
@@ -60,6 +62,15 @@ interface Props {
 const SEMVER_RE = /^\d+\.\d+\.\d+$/;
 const CHANNEL_RE = /^(stable|fast|candidate|eus)-\d+\.\d+$/;
 
+interface AvailableVersionsData {
+  channel: string;
+  currentVersion: string;
+  availableUpdates: Array<{ version: string }>;
+  conditionalUpdates: Array<{ version: string; risks?: string[] }>;
+  cachedAt: string;
+  cacheExpiresAt: string;
+}
+
 export const CreateDiagsCheckForm: React.FC<Props> = ({ isOpen, onClose, onCreated, initialValues }) => {
   const [version, setVersion]               = React.useState('');
   const [channel, setChannel]               = React.useState('');
@@ -69,6 +80,11 @@ export const CreateDiagsCheckForm: React.FC<Props> = ({ isOpen, onClose, onCreat
   const [useCustomChannel, setUseCustomChannel] = React.useState(false);
   const [error, setError]                   = React.useState<string | null>(null);
   const [submitting, setSubmitting]         = React.useState(false);
+
+  // Dynamic version fetching state
+  const [dynamicVersions, setDynamicVersions] = React.useState<AvailableVersionsData | null>(null);
+  const [fetchingVersions, setFetchingVersions] = React.useState(false);
+  const [versionsFetchError, setVersionsFetchError] = React.useState<string | null>(null);
 
   const [cv, cvLoaded, cvError] = useK8sWatchResource<ClusterVersion>({
     groupVersionKind: { group: 'config.openshift.io', version: 'v1', kind: 'ClusterVersion' },
@@ -103,6 +119,44 @@ export const CreateDiagsCheckForm: React.FC<Props> = ({ isOpen, onClose, onCreat
   const channelMatch = currentChannel.match(/^(stable|fast|candidate|eus)-(\d+\.\d+)$/);
   const channelXY    = channelMatch?.[2] ?? '';
 
+  // Fetch available versions for a channel (with client-side caching)
+  const fetchAvailableVersions = React.useCallback(async (targetChannel: string, forceRefresh = false) => {
+    if (!targetChannel || !CHANNEL_RE.test(targetChannel)) return;
+
+    setFetchingVersions(true);
+    setVersionsFetchError(null);
+
+    try {
+      const url = `${AVAILABLE_VERSIONS_API}?channel=${encodeURIComponent(targetChannel)}${forceRefresh ? '&refresh=true' : ''}`;
+      const response = await consoleFetch(url);
+      const data: AvailableVersionsData = await response.json();
+      setDynamicVersions(data);
+    } catch (e: unknown) {
+      const errorMsg = e instanceof Error ? e.message : 'Failed to fetch available versions';
+      setVersionsFetchError(errorMsg);
+      console.error('Error fetching available versions:', e);
+    } finally {
+      setFetchingVersions(false);
+    }
+  }, []);
+
+  // Fetch versions when channel changes
+  React.useEffect(() => {
+    if (!isOpen || !channel || useCustomChannel) return;
+
+    // Check if cached data is still valid
+    if (dynamicVersions?.channel === channel) {
+      const expiresAt = new Date(dynamicVersions.cacheExpiresAt).getTime();
+      if (Date.now() < expiresAt) {
+        // Cache is still valid
+        return;
+      }
+    }
+
+    // Fetch fresh data
+    fetchAvailableVersions(channel, false);
+  }, [isOpen, channel, useCustomChannel, dynamicVersions, fetchAvailableVersions]);
+
   React.useEffect(() => {
     if (!isOpen) return;
     if (initialValues) {
@@ -116,7 +170,7 @@ export const CreateDiagsCheckForm: React.FC<Props> = ({ isOpen, onClose, onCreat
       if (currentChannel && !channel) setChannel(currentChannel);
       if (detectedPlatform) setPlatform(detectedPlatform);
     }
-  }, [isOpen, initialValues, detectedPlatform]);
+  }, [isOpen, initialValues, detectedPlatform, currentChannel, channel]);
 
   const versionError = version && !SEMVER_RE.test(version) ? 'Version must be in X.Y.Z format (e.g. 4.22.22)' : '';
   const channelError = channel && !CHANNEL_RE.test(channel) ? 'Channel must be in {type}-X.Y format (e.g. stable-4.22)' : '';
@@ -129,6 +183,8 @@ export const CreateDiagsCheckForm: React.FC<Props> = ({ isOpen, onClose, onCreat
     setUseCustomVersion(false);
     setUseCustomChannel(false);
     setError(null);
+    setVersionsFetchError(null);
+    // Keep dynamicVersions cached for reuse
   };
 
   const handleClose = () => { resetForm(); onClose(); };
@@ -202,51 +258,120 @@ export const CreateDiagsCheckForm: React.FC<Props> = ({ isOpen, onClose, onCreat
       <Form>
         {/* ── Version ── */}
         <FormGroup label="Target Version" isRequired fieldId="version">
-          {!cvLoaded && <><Spinner size="sm" /> Loading available versions…</>}
+          {/* Show loading state */}
+          {(fetchingVersions || (!cvLoaded && !dynamicVersions)) && (
+            <><Spinner size="sm" /> Loading available versions…</>
+          )}
 
-          {cvLoaded && !cvError && !useCustomVersion && (
+          {/* Show version dropdown */}
+          {cvLoaded && !useCustomVersion && (
             <>
-              <FormSelect
-                id="version"
-                value={version}
-                onChange={(_e, v) => {
-                  if (v === '__custom__') { setUseCustomVersion(true); setVersion(''); }
-                  else setVersion(v);
-                }}
-                aria-label="Select target version"
-              >
-                <FormSelectOption value="" label="Select a version…" isPlaceholder />
-                {currentVersion && (
-                  <FormSelectOption value={currentVersion} label={`${currentVersion} (current, disabled)`} isDisabled />
+              <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+                <div style={{ flex: 1 }}>
+                  <FormSelect
+                    id="version"
+                    value={version}
+                    onChange={(_e, v) => {
+                      if (v === '__custom__') { setUseCustomVersion(true); setVersion(''); }
+                      else setVersion(v);
+                    }}
+                    aria-label="Select target version"
+                    isDisabled={fetchingVersions}
+                  >
+                    <FormSelectOption value="" label="Select a version…" isPlaceholder />
+                    {currentVersion && (
+                      <FormSelectOption value={currentVersion} label={`${currentVersion} (current)`} isDisabled />
+                    )}
+
+                    {/* Use dynamic versions if available, otherwise fall back to CVO data */}
+                    {dynamicVersions && dynamicVersions.channel === channel ? (
+                      <>
+                        {dynamicVersions.availableUpdates.length > 0 && (
+                          <>
+                            <FormSelectOption value="" label="— Available Updates —" isDisabled />
+                            {dynamicVersions.availableUpdates.map(u => (
+                              <FormSelectOption key={u.version} value={u.version} label={u.version} />
+                            ))}
+                          </>
+                        )}
+                        {dynamicVersions.conditionalUpdates.length > 0 && (
+                          <>
+                            <FormSelectOption value="" label="— Conditional Updates —" isDisabled />
+                            {dynamicVersions.conditionalUpdates.map(u => (
+                              <FormSelectOption
+                                key={u.version}
+                                value={u.version}
+                                label={`${u.version}${u.risks && u.risks.length > 0 ? ` — ${u.risks[0]}` : ''}`}
+                              />
+                            ))}
+                          </>
+                        )}
+                      </>
+                    ) : (
+                      <>
+                        {availableUpdates.length > 0 && (
+                          <>
+                            <FormSelectOption value="" label="— Available Updates —" isDisabled />
+                            {availableUpdates.map(u => (
+                              <FormSelectOption key={u.version} value={u.version} label={u.version} />
+                            ))}
+                          </>
+                        )}
+                        {conditionalUpdates.length > 0 && (
+                          <>
+                            <FormSelectOption value="" label="— Conditional Updates —" isDisabled />
+                            {conditionalUpdates.map(u => (
+                              <FormSelectOption
+                                key={u.release.version}
+                                value={u.release.version}
+                                label={`${u.release.version}${u.risks?.[0]?.name ? ` — ${u.risks[0].name}` : ''}`}
+                              />
+                            ))}
+                          </>
+                        )}
+                      </>
+                    )}
+
+                    <FormSelectOption value="" label="—" isDisabled />
+                    <FormSelectOption value="__custom__" label="Custom version…" />
+                  </FormSelect>
+                </div>
+
+                {/* Refresh button */}
+                {channel && CHANNEL_RE.test(channel) && !useCustomChannel && (
+                  <Button
+                    variant="secondary"
+                    onClick={() => fetchAvailableVersions(channel, true)}
+                    isDisabled={fetchingVersions}
+                    icon={<SyncIcon />}
+                    aria-label="Refresh available versions"
+                  >
+                    {fetchingVersions ? 'Refreshing...' : 'Refresh'}
+                  </Button>
                 )}
-                {availableUpdates.length > 0 && (
-                  <>
-                    <FormSelectOption value="" label="— Available Updates —" isDisabled />
-                    {availableUpdates.map(u => (
-                      <FormSelectOption key={u.version} value={u.version} label={u.version} />
-                    ))}
-                  </>
-                )}
-                {conditionalUpdates.length > 0 && (
-                  <>
-                    <FormSelectOption value="" label="— Conditional Updates —" isDisabled />
-                    {conditionalUpdates.map(u => (
-                      <FormSelectOption
-                        key={u.release.version}
-                        value={u.release.version}
-                        label={`${u.release.version}${u.risks?.[0]?.name ? ` — ${u.risks[0].name}` : ''}`}
-                      />
-                    ))}
-                  </>
-                )}
-                <FormSelectOption value="" label="—" isDisabled />
-                <FormSelectOption value="__custom__" label="Custom version…" />
-              </FormSelect>
+              </div>
+
               <FormHelperText>
-                <HelperText><HelperTextItem>
-                  {availableUpdates.length === 0 && conditionalUpdates.length === 0 && currentVersion
-                    ? 'No updates available from CVO — use "Custom version…" to test any target.'
-                    : 'Select from cluster\'s available upgrade targets, or enter a custom version.'}
+                <HelperText><HelperTextItem variant={versionsFetchError ? 'error' : 'default'}>
+                  {versionsFetchError ? (
+                    `Error: ${versionsFetchError}`
+                  ) : dynamicVersions && dynamicVersions.channel === channel ? (
+                    <>
+                      Versions for <strong>{dynamicVersions.channel}</strong>
+                      {' · '}
+                      {dynamicVersions.availableUpdates.length + dynamicVersions.conditionalUpdates.length === 0 ? (
+                        'No updates available'
+                      ) : (
+                        `${dynamicVersions.availableUpdates.length + dynamicVersions.conditionalUpdates.length} available`
+                      )}
+                      {' · '}
+                      Cached {new Date(dynamicVersions.cachedAt).toLocaleTimeString()}
+                    </>
+                  ) : availableUpdates.length === 0 && conditionalUpdates.length === 0 && currentVersion ? (
+                    'No updates available from CVO — use "Custom version…" to test any target.'
+                  ) : (
+                    'Select from available upgrade targets, or enter a custom version.'
+                  )}
                 </HelperTextItem></HelperText>
               </FormHelperText>
             </>
@@ -381,7 +506,7 @@ export const CreateDiagsCheckForm: React.FC<Props> = ({ isOpen, onClose, onCreat
 
       {/* Actions */}
       <div style={{ marginTop: 24, display: 'flex', gap: 12, alignItems: 'center' }}>
-        <Button variant="primary" isLoading={submitting} isDisabled={!canSubmit} onClick={handleSubmit} style={{ borderRadius: T.radiusMd }}>
+        <Button variant="primary" isLoading={submitting} isDisabled={!canSubmit} onClick={handleSubmit} style={{ borderRadius: T.radiusSm }}>
           Run Checks
         </Button>
         <Button variant="link" onClick={handleClose} isDisabled={submitting}>
