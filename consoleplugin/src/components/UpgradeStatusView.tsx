@@ -2,7 +2,7 @@ import * as React from 'react';
 import { Alert, Button, Spinner } from '@patternfly/react-core';
 import { SyncAltIcon, CaretDownIcon, CaretRightIcon } from '@patternfly/react-icons';
 import { consoleFetch, useK8sWatchResource } from '@openshift-console/dynamic-plugin-sdk';
-import { type UpgradeDiagsCheck } from '../types';
+import { type UpgradeDiagsCheck, type DiagsCheckResult } from '../types';
 
 const STATUS_API = '/api/proxy/plugin/managed-upgrade-operator/muo-api/api/v1/upgrade-status';
 const MUO_NS = 'openshift-managed-upgrade-operator';
@@ -840,6 +840,501 @@ const MachineHealthChecksCard: React.FC<{ mhcs: MachineHealthCheckStatus[] }> = 
   );
 };
 
+// ---- Phase stepper (Phase C) -----------------------------------------------
+
+type StepperStatus = 'done' | 'active' | 'pending' | 'failed' | 'warning' | 'skipped';
+
+// Phase order for upgrade progress. 'failed' is not in the sequence (handled separately).
+const STEP_PHASE_ORDER = ['not-started', 'pre-checks', 'control-plane', 'operators', 'worker-upgrade', 'complete'];
+
+function getStepStatus(stationPhase: string, currentPhase: string, isFailed: boolean): StepperStatus {
+  const stationIdx = STEP_PHASE_ORDER.indexOf(stationPhase);
+  const currentIdx = STEP_PHASE_ORDER.indexOf(currentPhase);
+  if (stationIdx < 0) return 'pending';
+  // When upgrade has failed, treat the station just before 'failed' as the failed station.
+  // We approximate by using the last active phase from snapshot.
+  if (isFailed) {
+    // All phases with index < currentIdx are done; currentIdx is failed.
+    if (stationIdx < currentIdx) return 'done';
+    if (stationIdx === currentIdx) return 'failed';
+    return 'pending';
+  }
+  if (currentIdx < 0) return 'pending';
+  if (stationIdx < currentIdx) return 'done';
+  if (stationIdx === currentIdx) return 'active';
+  return 'pending';
+}
+
+const stepStatusColor = (s: StepperStatus): string => {
+  if (s === 'done')    return T.success;
+  if (s === 'active')  return T.info;
+  if (s === 'failed')  return T.danger;
+  if (s === 'warning') return T.warning;
+  return T.textSubtle;
+};
+
+const StepIcon: React.FC<{ status: StepperStatus; size?: number }> = ({ status, size = 28 }) => {
+  const color = stepStatusColor(status);
+  const fill  = status === 'pending' || status === 'skipped' ? 'transparent' : `${color}22`;
+  return (
+    <svg width={size} height={size} viewBox="0 0 28 28" aria-hidden="true" style={{ flexShrink: 0 }}>
+      <circle cx={14} cy={14} r={12} fill={fill} stroke={color} strokeWidth={2} />
+      {status === 'done' && (
+        <path d="M8 14 L12 18 L20 10" fill="none" stroke={color} strokeWidth={2.5}
+          strokeLinecap="round" strokeLinejoin="round" />
+      )}
+      {status === 'active' && (
+        <circle cx={14} cy={14} r={5} fill={color} />
+      )}
+      {status === 'failed' && (
+        <path d="M10 10 L18 18 M18 10 L10 18" fill="none" stroke={color}
+          strokeWidth={2.5} strokeLinecap="round" />
+      )}
+      {status === 'warning' && (
+        <text x="14" y="19" textAnchor="middle" fill={color} fontSize="14" fontWeight="700">!</text>
+      )}
+      {(status === 'pending' || status === 'skipped') && (
+        <circle cx={14} cy={14} r={3} fill={color} />
+      )}
+    </svg>
+  );
+};
+
+// Pre-checks detail panel (shown when the Pre-checks station is expanded in the stepper).
+const PreChecksStationDetail: React.FC<{
+  matchingCheck: UpgradeDiagsCheck | null;
+  preflightIssues: DiagsCheckResult[];
+  onRunCheckRequested?: (version: string, channel: string) => void;
+  targetVersion?: string;
+  targetChannel?: string;
+}> = ({ matchingCheck, preflightIssues, onRunCheckRequested, targetVersion, targetChannel }) => {
+  if (!matchingCheck) {
+    return (
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+        <div style={{ flex: 1, fontSize: 13, color: T.textSubtle }}>
+          No diagnostics check found for this upgrade target. Run a check to identify
+          potential roadblocks before or during this upgrade.
+        </div>
+        {onRunCheckRequested && targetVersion && (
+          <Button
+            variant="primary" size="sm"
+            onClick={() => onRunCheckRequested(targetVersion, targetChannel ?? '')}
+            style={{ borderRadius: T.radiusMd, whiteSpace: 'nowrap' }}
+          >
+            Run Preflight Check
+          </Button>
+        )}
+      </div>
+    );
+  }
+
+  const s = matchingCheck.status;
+  const totalChecks = s?.checks?.length ?? 0;
+  const passed  = s?.checksPassed  ?? 0;
+  const failed  = s?.checksFailed  ?? 0;
+  const warned  = s?.checksWarned  ?? 0;
+  const errored = s?.checksErrored ?? 0;
+
+  return (
+    <div>
+      <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', alignItems: 'center', marginBottom: preflightIssues.length > 0 ? 10 : 0 }}>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+          {([
+            { n: passed,  label: 'passed',  color: T.success },
+            { n: failed,  label: 'failed',  color: T.danger },
+            { n: warned,  label: 'warned',  color: T.warning },
+            { n: errored, label: 'error',   color: T.warning },
+          ] as Array<{ n: number; label: string; color: string }>).map(({ n, label, color }) => n > 0 ? (
+            <span key={label} style={{
+              display: 'inline-flex', alignItems: 'center', gap: 4,
+              padding: '2px 10px', borderRadius: T.radiusPill, fontWeight: 600, fontSize: 12,
+              background: `${color}22`, color, border: `1px solid ${color}55`,
+            }}>
+              {n} {label}
+            </span>
+          ) : null)}
+          <span style={{ fontSize: 12, color: T.textMuted }}>{totalChecks} total checks</span>
+        </div>
+        <span style={{ fontSize: 12, color: T.textSubtle, marginLeft: 'auto' }}>
+          See <strong>Diagnostics Checks</strong> tab for full details
+        </span>
+      </div>
+      {preflightIssues.length > 0 && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+          {preflightIssues.slice(0, 5).map(c => {
+            const color = c.result === 'Failed' || c.result === 'Error' ? T.danger : T.warning;
+            return (
+              <div key={c.name} style={{
+                display: 'flex', alignItems: 'flex-start', gap: 8,
+                padding: '4px 8px', borderRadius: T.radiusSm,
+                background: `${color}11`, borderLeft: `3px solid ${color}`, fontSize: 12,
+              }}>
+                <span style={{ color, fontWeight: 700, minWidth: 50 }}>{c.result}</span>
+                <span style={{ fontWeight: 600, color: T.textSubtle }}>
+                  {c.name.replace(/([a-z])([A-Z])/g, '$1 $2')}
+                </span>
+                {c.execution?.summary && (
+                  <span style={{ color: T.textMuted, flex: 1 }}>— {c.execution.summary}</span>
+                )}
+              </div>
+            );
+          })}
+          {preflightIssues.length > 5 && (
+            <div style={{ fontSize: 12, color: T.textMuted, padding: '2px 8px' }}>
+              +{preflightIssues.length - 5} more — see Diagnostics Checks tab
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
+
+interface StepStation {
+  id: string;
+  label: string;
+  status: StepperStatus;
+  elapsed?: number;
+  summary?: string;
+}
+
+const UpgradePhaseStepper: React.FC<{
+  snapshot: UpgradeSnapshot;
+  matchingCheck: UpgradeDiagsCheck | null;
+  preflightIssues: DiagsCheckResult[];
+  onRunCheckRequested?: (version: string, channel: string) => void;
+}> = ({ snapshot, matchingCheck, preflightIssues, onRunCheckRequested }) => {
+  const isFailed = snapshot.phase === 'failed';
+
+  // Determine the "effective current phase" for getStepStatus when phase=failed.
+  // We approximate: use the last phase that would have been active before failure.
+  // The API may expose controlPlane.phase etc. as clues, but we default to 'worker-upgrade'.
+  const effectivePhase = isFailed
+    ? (snapshot.clusterOperators?.phase === 'complete' ? 'worker-upgrade'
+      : snapshot.controlPlane?.phase === 'complete' ? 'operators'
+      : 'control-plane')
+    : snapshot.phase;
+
+  // Auto-open the currently active (or failed) station on mount.
+  const [selectedStation, setSelectedStation] = React.useState<string | null>(() => {
+    if (snapshot.phase === 'failed') return effectivePhase;
+    if (STEP_PHASE_ORDER.includes(snapshot.phase)
+        && snapshot.phase !== 'not-started'
+        && snapshot.phase !== 'complete') {
+      return snapshot.phase;
+    }
+    return null;
+  });
+
+  // Worker aggregate counts
+  const totalWorkerNodes   = (snapshot.machinePools ?? []).reduce((a, p) => a + p.total, 0);
+  const updatedWorkerNodes = (snapshot.machinePools ?? []).reduce((a, p) => a + p.updated, 0);
+
+  const stations: StepStation[] = [
+    {
+      id:      'pre-checks',
+      label:   'Pre-checks',
+      status:  getStepStatus('pre-checks', effectivePhase, isFailed),
+      elapsed: (() => {
+        const s = matchingCheck?.status;
+        if (!s?.startedAt) return undefined;
+        const start = new Date(s.startedAt).getTime();
+        const end   = s.completedAt ? new Date(s.completedAt).getTime() : Date.now();
+        return Math.round((end - start) / 1000);
+      })(),
+      summary: !matchingCheck
+        ? 'Not run'
+        : `${matchingCheck.status?.checksPassed ?? 0} passed` +
+          (preflightIssues.length > 0 ? `, ${preflightIssues.length} issue${preflightIssues.length !== 1 ? 's' : ''}` : ''),
+    },
+    {
+      id:      'control-plane',
+      label:   'Control Plane',
+      status:  getStepStatus('control-plane', effectivePhase, isFailed),
+      elapsed: snapshot.controlPlane?.elapsedSeconds,
+      summary: snapshot.controlPlane?.phase ? phaseLabel(snapshot.controlPlane.phase) : '—',
+    },
+    {
+      id:      'operators',
+      label:   'Operators',
+      status:  getStepStatus('operators', effectivePhase, isFailed),
+      elapsed: snapshot.clusterOperators?.elapsedSeconds,
+      summary: snapshot.clusterOperators
+        ? `${snapshot.clusterOperators.available}/${snapshot.clusterOperators.total} available`
+        : '—',
+    },
+    {
+      id:      'worker-upgrade',
+      label:   'Workers',
+      status:  getStepStatus('worker-upgrade', effectivePhase, isFailed),
+      elapsed: (snapshot.machinePools ?? []).reduce<number | undefined>(
+        (max, p) => p.elapsedSeconds !== undefined ? Math.max(max ?? 0, p.elapsedSeconds) : max, undefined
+      ),
+      summary: totalWorkerNodes > 0 ? `${updatedWorkerNodes}/${totalWorkerNodes} updated` : '—',
+    },
+    {
+      id:      'complete',
+      label:   'Complete',
+      status:  snapshot.phase === 'complete' ? 'done' : isFailed ? 'failed' : 'pending',
+      elapsed: snapshot.phase === 'complete' ? snapshot.elapsedSeconds : undefined,
+      summary: snapshot.phase === 'complete' ? `Total ${fmtElapsed(snapshot.elapsedSeconds)}` : '—',
+    },
+  ];
+
+  const toggleStation = (id: string) =>
+    setSelectedStation(prev => prev === id ? null : id);
+
+  return (
+
+    <div style={{
+      border: `1px solid ${T.border}`,
+      borderRadius: T.radiusLg,
+      overflow: 'hidden',
+      boxShadow: T.shadow,
+      marginBottom: 20,
+    }}>
+      <SectionHeader
+        title="Upgrade Progress"
+        badge={<PhaseBadge phase={snapshot.phase} size="sm" />}
+        meta={snapshot.elapsedSeconds && snapshot.elapsedSeconds > 0
+          ? `${fmtElapsed(snapshot.elapsedSeconds)} elapsed` : undefined}
+      />
+
+      {/* Station row */}
+      <div style={{ padding: '20px 16px 16px', display: 'flex', alignItems: 'flex-start' }}>
+        {stations.map((station, idx) => {
+          const isSelected = selectedStation === station.id;
+          const color = stepStatusColor(station.status);
+          // Connector is green once the left station is done
+          const connectorColor = station.status === 'done' ? T.success : T.border;
+
+          return (
+            <React.Fragment key={station.id}>
+              <div
+                onClick={() => toggleStation(station.id)}
+                role="button"
+                aria-expanded={isSelected}
+                aria-label={`${station.label}: ${station.status}`}
+                style={{
+                  display: 'flex', flexDirection: 'column', alignItems: 'center',
+                  flex: 1, minWidth: 72, cursor: 'pointer',
+                  padding: '6px 4px 8px',
+                  borderRadius: T.radiusMd,
+                  background: isSelected ? `${color}11` : 'transparent',
+                  border: isSelected ? `1px solid ${color}44` : '1px solid transparent',
+                  transition: 'background 0.15s, border-color 0.15s',
+                  userSelect: 'none',
+                }}
+              >
+                <StepIcon status={station.status} size={28} />
+                <div style={{
+                  marginTop: 6, fontSize: 11, fontWeight: 700, textAlign: 'center',
+                  textTransform: 'uppercase', letterSpacing: '0.05em', color,
+                }}>
+                  {station.label}
+                </div>
+                {station.elapsed !== undefined && station.elapsed > 0 && (
+                  <div style={{ fontSize: 11, color: T.textMuted, marginTop: 1 }}>
+                    {fmtElapsed(station.elapsed)}
+                  </div>
+                )}
+                {station.summary && (
+                  <div style={{
+                    fontSize: 10, color: T.textSubtle, marginTop: 2,
+                    textAlign: 'center', lineHeight: 1.3, maxWidth: 100,
+                  }}>
+                    {station.summary}
+                  </div>
+                )}
+              </div>
+
+              {idx < stations.length - 1 && (
+                <div style={{
+                  flexShrink: 0, width: 24, alignSelf: 'flex-start', marginTop: 20,
+                  display: 'flex', alignItems: 'center',
+                }}>
+                  <div style={{ flex: 1, height: 2, background: connectorColor }} />
+                  <div style={{
+                    width: 0, height: 0,
+                    borderTop: '4px solid transparent',
+                    borderBottom: '4px solid transparent',
+                    borderLeft: `5px solid ${connectorColor}`,
+                  }} />
+                </div>
+              )}
+            </React.Fragment>
+          );
+        })}
+      </div>
+
+      {/* Expandable detail panel for selected station */}
+      {selectedStation && (() => {
+        const station = stations.find(s => s.id === selectedStation);
+        if (!station) return null;
+        const color = stepStatusColor(station.status);
+
+        return (
+          <div style={{
+            borderTop: `1px solid ${T.border}`,
+            padding: '12px 20px 14px',
+            background: `${color}08`,
+            borderLeft: `4px solid ${color}`,
+          }}>
+            {selectedStation === 'pre-checks' && (
+              <>
+                <div style={{ fontSize: 12, fontWeight: 700, color: T.textSubtle, textTransform: 'uppercase',
+                  letterSpacing: '0.07em', marginBottom: 8 }}>
+                  Preflight Diagnostics
+                </div>
+                <PreChecksStationDetail
+                  matchingCheck={matchingCheck}
+                  preflightIssues={preflightIssues}
+                  onRunCheckRequested={onRunCheckRequested}
+                  targetVersion={snapshot.targetVersion}
+                  targetChannel={snapshot.targetChannel}
+                />
+              </>
+            )}
+
+            {selectedStation === 'control-plane' && (
+              <>
+                <div style={{ fontSize: 12, fontWeight: 700, color: T.textSubtle, textTransform: 'uppercase',
+                  letterSpacing: '0.07em', marginBottom: 8 }}>
+                  Control Plane
+                </div>
+                <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap', alignItems: 'flex-start' }}>
+                  <div>
+                    <div style={{ fontSize: 11, color: T.textSubtle, textTransform: 'uppercase',
+                      letterSpacing: '0.05em', marginBottom: 2 }}>Phase</div>
+                    <PhaseBadge phase={snapshot.controlPlane?.phase ?? 'unknown'} size="sm" />
+                  </div>
+                  {snapshot.controlPlane?.elapsedSeconds !== undefined && (
+                    <div>
+                      <div style={{ fontSize: 11, color: T.textSubtle, textTransform: 'uppercase',
+                        letterSpacing: '0.05em', marginBottom: 2 }}>Elapsed</div>
+                      <div style={{ fontSize: 15, fontWeight: 600 }}>
+                        {fmtElapsed(snapshot.controlPlane.elapsedSeconds)}
+                      </div>
+                    </div>
+                  )}
+                  {snapshot.controlPlane?.startedAt && (
+                    <div>
+                      <div style={{ fontSize: 11, color: T.textSubtle, textTransform: 'uppercase',
+                        letterSpacing: '0.05em', marginBottom: 2 }}>Started</div>
+                      <div style={{ fontSize: 12 }}>{new Date(snapshot.controlPlane.startedAt).toLocaleString()}</div>
+                    </div>
+                  )}
+                  {snapshot.controlPlane?.message && (
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontSize: 11, color: T.textSubtle, textTransform: 'uppercase',
+                        letterSpacing: '0.05em', marginBottom: 2 }}>Message</div>
+                      <div style={{ fontSize: 12, color: T.textSubtle }}>{snapshot.controlPlane.message}</div>
+                    </div>
+                  )}
+                </div>
+              </>
+            )}
+
+            {selectedStation === 'operators' && snapshot.clusterOperators && (
+              <>
+                <div style={{ fontSize: 12, fontWeight: 700, color: T.textSubtle, textTransform: 'uppercase',
+                  letterSpacing: '0.07em', marginBottom: 8 }}>
+                  Cluster Operators
+                </div>
+                <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', alignItems: 'center' }}>
+                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                    {([
+                      { n: snapshot.clusterOperators.available,   label: 'available',   c: T.success },
+                      { n: snapshot.clusterOperators.progressing, label: 'progressing', c: T.info },
+                      { n: snapshot.clusterOperators.degraded,    label: 'degraded',    c: T.danger },
+                    ] as Array<{ n: number; label: string; c: string }>).map(({ n, label, c }) => n > 0 ? (
+                      <span key={label} style={{
+                        display: 'inline-flex', alignItems: 'center', gap: 4,
+                        padding: '2px 10px', borderRadius: T.radiusPill, fontWeight: 600, fontSize: 12,
+                        background: `${c}22`, color: c, border: `1px solid ${c}55`,
+                      }}>
+                        {n} {label}
+                      </span>
+                    ) : null)}
+                    <span style={{ fontSize: 12, color: T.textMuted }}>
+                      {snapshot.clusterOperators.total} total
+                    </span>
+                  </div>
+                  {snapshot.clusterOperators.elapsedSeconds !== undefined && (
+                    <span style={{ fontSize: 12, color: T.textSubtle }}>
+                      {fmtElapsed(snapshot.clusterOperators.elapsedSeconds)} elapsed
+                    </span>
+                  )}
+                  <span style={{ fontSize: 12, color: T.textSubtle, marginLeft: 'auto' }}>
+                    ↓ Expand Cluster Operators below for per-operator details
+                  </span>
+                </div>
+              </>
+            )}
+
+            {selectedStation === 'worker-upgrade' && (
+              <>
+                <div style={{ fontSize: 12, fontWeight: 700, color: T.textSubtle, textTransform: 'uppercase',
+                  letterSpacing: '0.07em', marginBottom: 8 }}>
+                  Worker Node Pools
+                </div>
+                <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'flex-start' }}>
+                  {(snapshot.machinePools ?? []).map(pool => {
+                    const pc = phaseColor(pool.phase);
+                    return (
+                      <div key={pool.name} style={{
+                        display: 'flex', flexDirection: 'column', gap: 4,
+                        padding: '8px 12px', border: `1px solid ${pc}44`,
+                        borderRadius: T.radiusMd, minWidth: 110,
+                      }}>
+                        <div style={{ fontSize: 12, fontWeight: 700, color: pc }}>{pool.name}</div>
+                        <div style={{ fontSize: 15, fontWeight: 600 }}>
+                          {pool.updated}/{pool.total}
+                          <span style={{ fontSize: 11, fontWeight: 400, color: T.textSubtle, marginLeft: 4 }}>updated</span>
+                        </div>
+                        <PhaseBadge phase={pool.phase} size="sm" />
+                        {pool.elapsedSeconds !== undefined && pool.elapsedSeconds > 0 && (
+                          <div style={{ fontSize: 11, color: T.textSubtle }}>{fmtElapsed(pool.elapsedSeconds)}</div>
+                        )}
+                        {pool.unavailable > 0 && (
+                          <div style={{ fontSize: 11, color: T.warning }}>{pool.unavailable} unavailable</div>
+                        )}
+                        {pool.degraded > 0 && (
+                          <div style={{ fontSize: 11, color: T.danger }}>{pool.degraded} degraded</div>
+                        )}
+                      </div>
+                    );
+                  })}
+                  <span style={{ fontSize: 12, color: T.textSubtle, marginLeft: 'auto', alignSelf: 'center' }}>
+                    ↓ Expand Machine Config Pools below for node-level details
+                  </span>
+                </div>
+              </>
+            )}
+
+            {selectedStation === 'complete' && (
+              <div style={{ fontSize: 13 }}>
+                {snapshot.phase === 'complete'
+                  ? <span style={{ color: T.success, fontWeight: 700 }}>
+                      ✓ Upgrade completed successfully in {fmtElapsed(snapshot.elapsedSeconds)}
+                    </span>
+                  : isFailed
+                  ? <span style={{ color: T.danger, fontWeight: 700 }}>
+                      Upgrade failed — review blockers and cluster operator status above
+                    </span>
+                  : <span style={{ color: T.textMuted }}>
+                      Waiting for all upgrade phases to complete…
+                    </span>
+                }
+              </div>
+            )}
+          </div>
+        );
+      })()}
+    </div>
+  );
+};
+
 // ---- Main component --------------------------------------------------------
 
 interface UpgradeStatusViewProps {
@@ -907,6 +1402,8 @@ export const UpgradeStatusView: React.FC<UpgradeStatusViewProps> = ({ onRunCheck
 
   React.useEffect(() => {
     fetchStatus();
+    const interval = setInterval(() => fetchStatus(), 30_000);
+    return () => clearInterval(interval);
   }, [fetchStatus]);
 
   const cardStyle: React.CSSProperties = {
@@ -954,6 +1451,14 @@ export const UpgradeStatusView: React.FC<UpgradeStatusViewProps> = ({ onRunCheck
 
       {snapshot && (
         <>
+          {/* ---- Phase stepper (Phase C) ---- */}
+          <UpgradePhaseStepper
+            snapshot={snapshot}
+            matchingCheck={matchingCheck}
+            preflightIssues={preflightIssues}
+            onRunCheckRequested={onRunCheckRequested}
+          />
+
           {/* ---- Summary card ---- */}
           <div style={cardStyle}>
             <SectionHeader
@@ -993,31 +1498,6 @@ export const UpgradeStatusView: React.FC<UpgradeStatusViewProps> = ({ onRunCheck
                   </div>
                 </div>
               )}
-              {/* Phase strip */}
-              <div style={{ marginLeft: 'auto', display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
-                {(['control-plane', 'operators', 'worker-upgrade'] as const).map((ph) => {
-                  const done = snapshot.phase === 'complete'
-                    || (ph === 'control-plane' && ['operators', 'worker-upgrade', 'complete'].includes(snapshot.phase))
-                    || (ph === 'operators' && ['worker-upgrade', 'complete'].includes(snapshot.phase));
-                  const active = snapshot.phase === ph;
-                  const color = done ? T.success : active ? T.info : T.textSubtle;
-                  return (
-                    <React.Fragment key={ph}>
-                      {ph !== 'control-plane' && (
-                        <span style={{ color: T.textSubtle, fontSize: 12 }}>→</span>
-                      )}
-                      <span style={{
-                        fontSize: 11, fontWeight: 600,
-                        color,
-                        borderBottom: active ? `2px solid ${color}` : '2px solid transparent',
-                        paddingBottom: 1,
-                      }}>
-                        {phaseLabel(ph)}
-                      </span>
-                    </React.Fragment>
-                  );
-                })}
-              </div>
             </div>
             {snapshot.cvoMessage && (
               <div style={{

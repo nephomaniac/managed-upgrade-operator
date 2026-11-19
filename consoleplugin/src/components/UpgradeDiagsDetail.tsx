@@ -1,7 +1,7 @@
 import * as React from 'react';
 import { List, ListItem } from '@patternfly/react-core';
 import { InfoCircleIcon } from '@patternfly/react-icons';
-import { type UpgradeDiagsCheck, type DiagsCheckResult, type CheckResult } from '../types';
+import { type UpgradeDiagsCheck, type DiagsCheckResult, type CheckResult, type StructuredFinding } from '../types';
 import { StatusBadge } from './StatusBadge';
 
 interface Props { pfc: UpgradeDiagsCheck; }
@@ -99,6 +99,83 @@ const SummaryBanner: React.FC<{
   );
 };
 
+// Severity color mapping for structured findings.
+const sevColor = (sev?: StructuredFinding['severity']): string => {
+  if (sev === 'critical' || sev === 'high') return T.danger;
+  if (sev === 'medium') return T.warning;
+  if (sev === 'low') return T.info;
+  return T.textSubtle;
+};
+
+// Rich card list for structured findings — groups per-finding severity, owner, resource, and action.
+const StructuredFindingsList: React.FC<{ findings: StructuredFinding[] }> = ({ findings }) => (
+  <div style={{ marginBottom: 8 }}>
+    <div style={{ fontWeight: 600, marginBottom: 6, fontSize: 13 }}>
+      Findings ({findings.length}):
+    </div>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+      {findings.map((sf, i) => {
+        const color = sevColor(sf.severity);
+        const ownerLabel = sf.ownerLabel
+          ?? (sf.owner === 'customer' ? 'Admin action required'
+            : sf.owner === 'service-team' ? 'Red Hat action required'
+            : null);
+        return (
+          <div key={i} style={{
+            padding: '8px 12px',
+            borderLeft: `3px solid ${color}`,
+            background: `${color}08`,
+            borderRadius: T.radiusSm,
+          }}>
+            {/* Badges row */}
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center', marginBottom: 4 }}>
+              {sf.severity && (
+                <span style={{
+                  display: 'inline-flex', padding: '1px 7px', borderRadius: T.radiusPill,
+                  fontSize: 10, fontWeight: 700, textTransform: 'uppercase' as const,
+                  background: `${color}22`, color, border: `1px solid ${color}55`,
+                }}>
+                  {sf.severity}
+                </span>
+              )}
+              {ownerLabel && (
+                <span style={{
+                  display: 'inline-flex', padding: '1px 7px', borderRadius: T.radiusPill,
+                  fontSize: 10, fontWeight: 600,
+                  background: sf.owner === 'customer' ? T.warningBg : T.infoBg,
+                  color: sf.owner === 'customer' ? T.warning : T.info,
+                  border: `1px solid ${T.border}`,
+                }}>
+                  {ownerLabel}
+                </span>
+              )}
+              {sf.resource && (
+                <span style={{
+                  display: 'inline-flex', alignItems: 'center', padding: '1px 7px',
+                  borderRadius: T.radiusPill, fontSize: 10, fontFamily: 'monospace',
+                  background: T.bgSecondary, color: T.textSubtle, border: `1px solid ${T.border}`,
+                }}>
+                  {sf.resource.kind}
+                  {sf.resource.namespace ? `/${sf.resource.namespace}` : ''}
+                  /{sf.resource.name}
+                </span>
+              )}
+            </div>
+            {/* Message */}
+            <div style={{ fontSize: 13 }}>{sf.message}</div>
+            {/* Per-finding action */}
+            {sf.action && (
+              <div style={{ marginTop: 4, fontSize: 12, color: T.textSubtle, fontStyle: 'italic' }}>
+                ⚑ {sf.action}
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  </div>
+);
+
 // Expanded check row content
 const CheckRowDetail: React.FC<{ c: DiagsCheckResult }> = ({ c }) => {
   // Prefer backend-provided ownerLabel, fall back to client-side translation for backwards compatibility
@@ -111,7 +188,8 @@ const CheckRowDetail: React.FC<{ c: DiagsCheckResult }> = ({ c }) => {
   );
 
   const hasContent = c.execution.summary || c.action || c.execution.error ||
-    (c.execution.findings && c.execution.findings.length > 0) || ownerLabel;
+    (c.execution.findings && c.execution.findings.length > 0) ||
+    (c.structuredFindings && c.structuredFindings.length > 0) || ownerLabel;
 
   if (!hasContent) {
     return <div style={{ padding: '8px 0', color: T.textMuted, fontSize: 13 }}>No additional details.</div>;
@@ -162,8 +240,14 @@ const CheckRowDetail: React.FC<{ c: DiagsCheckResult }> = ({ c }) => {
         </div>
       )}
 
-      {/* Findings */}
-      {c.execution.findings && c.execution.findings.length > 0 && (
+      {/* Structured findings — rich per-finding cards when available */}
+      {c.structuredFindings && c.structuredFindings.length > 0 && (
+        <StructuredFindingsList findings={c.structuredFindings} />
+      )}
+
+      {/* Legacy string findings — only shown when no structured findings are present */}
+      {(!c.structuredFindings || c.structuredFindings.length === 0) &&
+        c.execution.findings && c.execution.findings.length > 0 && (
         <div style={{ marginBottom: 8 }}>
           <div style={{ fontWeight: 600, marginBottom: 4, fontSize: 13 }}>Findings:</div>
           <List style={{ fontSize: 13 }}>
@@ -303,7 +387,8 @@ export const UpgradeDiagsDetail: React.FC<Props> = ({ pfc }) => {
                 const isExpanded   = !!expanded[c.name];
                 const borderColor  = checkBorderColor(c.result);
                 const stateLabel   = { Completed: 'Completed', Error: 'Error', Skipped: 'Skipped', TimedOut: 'Timed Out' }[c.execution.state] ?? c.execution.state;
-                const hasDetail    = c.execution.error || c.action || c.execution.summary || (c.execution.findings?.length ?? 0) > 0;
+                const hasDetail    = c.execution.error || c.action || c.execution.summary ||
+                  (c.execution.findings?.length ?? 0) > 0 || (c.structuredFindings?.length ?? 0) > 0;
 
                 return (
                   <React.Fragment key={c.name}>

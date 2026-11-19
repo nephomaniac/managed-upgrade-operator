@@ -35,7 +35,7 @@ type CheckOutput struct {
 	Result upgradev1alpha1.CheckResult
 	// Summary is a one-line verdict (e.g. "3 degraded operators found").
 	Summary string
-	// Findings are per-item details shown in the CR status.
+	// Findings are per-item details shown in the CR status (string form for backwards compat).
 	Findings []string
 	// Error is the reason the check machinery failed (Result=CheckResultError only).
 	Error string
@@ -44,6 +44,10 @@ type CheckOutput struct {
 	Owner upgradev1alpha1.CheckOwner
 	// Action is the recommended next step. Set this on Failed and Error results.
 	Action string
+	// StructuredFindings provides rich, machine-readable per-finding details.
+	// When set, the framework auto-populates string Findings from Message fields
+	// if Findings is empty, maintaining backwards compatibility.
+	StructuredFindings []upgradev1alpha1.StructuredFinding
 }
 
 // ReadinessCheck is the contract every readiness check must satisfy.

@@ -17,7 +17,7 @@ import (
 const (
 	descPodDisruptionBudgets = "Checks for PDBs that block node drains, using the same HealthCheckPDB function MUO calls during upgrades. Combines direct PDB inspection with DVO metrics."
 	descPDBMasterInfra       = "Identifies PodDisruptionBudgets that could block master or infra node drain during an upgrade. Scans two sources: (1) pods currently running on master/infra nodes, and (2) DaemonSet pod templates that tolerate master/infra taints and will always be present on those nodes. Only flags PDBs that are restrictive (MaxUnavailable=0 or MinAvailable=100%) and are confirmed to cover workloads on those nodes."
-	descPDBDrainSafety       = "Surfaces per-PDB status.currentHealthy, status.desiredHealthy, and status.disruptionsAllowed to identify PDBs that will block node drain during upgrade. Applies the MCS-252 four-case safety predicate: a PDB with disruptionsAllowed=0 and currentHealthy>0 will stall drain until PDBForceDrainTimeout expires; a PDB with currentHealthy=0 is protecting no pods and is safe to bypass. Control-plane PDBs (openshift-etcd, openshift-kube-apiserver, etc.) are classified as Red Hat-owned; all others are admin-owned. Source: MCS-252/253 (control-plane drain safety) and ROSAENG-66714."
+	descPDBDrainSafety       = "Surfaces per-PDB status.currentHealthy, status.desiredHealthy, and status.disruptionsAllowed to identify PDBs that will block node drain during upgrade. Applies the MCS-252 four-case safety predicate: a PDB with disruptionsAllowed=0 and currentHealthy>0 will stall drain until PDBForceDrainTimeout expires; a PDB with currentHealthy=0 is protecting no pods and is safe to bypass. Control-plane PDBs (openshift-etcd, openshift-kube-apiserver, etc.) are classified as Red Hat-owned; all others are customer-owned. Source: MCS-252/253 (control-plane drain safety) and ROSAENG-66714."
 )
 
 type podDisruptionBudgetsCheck struct{}
@@ -338,7 +338,8 @@ func (c *pdbDrainSafetyCheck) Run(ctx context.Context, deps CheckDependencies, l
 		}
 	}
 
-	var blocking, findings []string
+	var blockingStructured []upgradev1alpha1.StructuredFinding
+	var allStructured []upgradev1alpha1.StructuredFinding
 	hasServiceTeamBlocker := false
 
 	for _, pdb := range pdbList.Items {
@@ -354,44 +355,68 @@ func (c *pdbDrainSafetyCheck) Run(ctx context.Context, deps CheckDependencies, l
 		case allowed == 0 && currentHealthy > 0:
 			// MCS-252 cases 2 (CP) and 4 (customer): PDB is protecting live healthy pods —
 			// drain will stall until PDBForceDrainTimeout.
-			owner := "customer"
+			owner := upgradev1alpha1.OwnerCustomer
+			ownerShort := "customer"
 			if isCP {
-				owner = "redhat"
+				owner = upgradev1alpha1.OwnerServiceTeam
+				ownerShort = "redhat"
 				hasServiceTeamBlocker = true
 			}
 			msg := fmt.Sprintf("%s [owner=%s]: BLOCKING DRAIN — disruptionsAllowed=0 currentHealthy=%d desiredHealthy=%d %s",
-				key, owner, currentHealthy, desiredHealthy, uhepStr)
-			blocking = append(blocking, msg)
-			findings = append(findings, msg)
+				key, ownerShort, currentHealthy, desiredHealthy, uhepStr)
+			sf := NewFinding(msg).
+				WithSeverity(upgradev1alpha1.FindingSeverityCritical).
+				WithOwner(owner).
+				WithPDB(pdb.Namespace, pdb.Name).
+				WithMetadata("disruptionsAllowed", "0").
+				WithMetadata("currentHealthy", fmt.Sprintf("%d", currentHealthy)).
+				WithMetadata("desiredHealthy", fmt.Sprintf("%d", desiredHealthy)).
+				Build()
+			blockingStructured = append(blockingStructured, sf)
+			allStructured = append(allStructured, sf)
 
 		case allowed == 0 && currentHealthy == 0:
 			// MCS-252 case 1 (CP) and 3 (uninstalling): PDB blocks on paper but no healthy pods —
 			// safe to drain past this PDB.
-			findings = append(findings, fmt.Sprintf("%s: disruptionsAllowed=0 currentHealthy=0 — safe (no pods to protect) %s", key, uhepStr))
+			msg := fmt.Sprintf("%s: disruptionsAllowed=0 currentHealthy=0 — safe (no pods to protect) %s", key, uhepStr)
+			sf := NewFinding(msg).
+				WithSeverity(upgradev1alpha1.FindingSeverityLow).
+				WithPDB(pdb.Namespace, pdb.Name).
+				WithMetadata("disruptionsAllowed", "0").
+				WithMetadata("currentHealthy", "0").
+				Build()
+			allStructured = append(allStructured, sf)
 
 		default:
-			findings = append(findings, fmt.Sprintf("%s: disruptionsAllowed=%d currentHealthy=%d desiredHealthy=%d %s — ok",
-				key, allowed, currentHealthy, desiredHealthy, uhepStr))
+			msg := fmt.Sprintf("%s: disruptionsAllowed=%d currentHealthy=%d desiredHealthy=%d %s — ok",
+				key, allowed, currentHealthy, desiredHealthy, uhepStr)
+			sf := NewFinding(msg).
+				WithPDB(pdb.Namespace, pdb.Name).
+				WithMetadata("disruptionsAllowed", fmt.Sprintf("%d", allowed)).
+				WithMetadata("currentHealthy", fmt.Sprintf("%d", currentHealthy)).
+				WithMetadata("desiredHealthy", fmt.Sprintf("%d", desiredHealthy)).
+				Build()
+			allStructured = append(allStructured, sf)
 		}
 	}
 
-	if len(blocking) > 0 {
+	if len(blockingStructured) > 0 {
 		owner := upgradev1alpha1.OwnerCustomer
 		if hasServiceTeamBlocker {
 			owner = upgradev1alpha1.OwnerServiceTeam
 		}
 		return CheckOutput{
-			Result:   upgradev1alpha1.CheckResultWarning,
-			Summary:  fmt.Sprintf("%d PDB(s) will stall node drain (disruptionsAllowed=0, currentHealthy>0)", len(blocking)),
-			Findings: findings,
-			Owner:    owner,
-			Action:   "MUO will wait up to PDBForceDrainTimeout minutes before force-draining. For admin PDBs: coordinate with the application owner to scale up pods or temporarily relax the PDB. For Red Hat PDBs: contact Red Hat support.",
+			Result:             upgradev1alpha1.CheckResultWarning,
+			Summary:            fmt.Sprintf("%d PDB(s) will stall node drain (disruptionsAllowed=0, currentHealthy>0)", len(blockingStructured)),
+			Owner:              owner,
+			Action:             "MUO will wait up to PDBForceDrainTimeout minutes before force-draining. For admin PDBs: coordinate with the application owner to scale up pods or temporarily relax the PDB. For Red Hat PDBs: contact Red Hat support.",
+			StructuredFindings: allStructured,
 		}
 	}
 
 	return CheckOutput{
-		Result:   upgradev1alpha1.CheckPassed,
-		Summary:  fmt.Sprintf("All %d PDB(s) allow node drain (disruptionsAllowed>0 or currentHealthy=0)", len(pdbList.Items)),
-		Findings: findings,
+		Result:             upgradev1alpha1.CheckPassed,
+		Summary:            fmt.Sprintf("All %d PDB(s) allow node drain (disruptionsAllowed>0 or currentHealthy=0)", len(pdbList.Items)),
+		StructuredFindings: allStructured,
 	}
 }

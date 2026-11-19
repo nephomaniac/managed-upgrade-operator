@@ -71,6 +71,15 @@ func runCheck(check DiagnosticsCheck, ctx context.Context, deps CheckDependencie
 	if output.Action != "" {
 		r = withAction(r, output.Action)
 	}
+	if len(output.StructuredFindings) > 0 {
+		r.StructuredFindings = output.StructuredFindings
+		// Auto-populate string Findings from structured findings for backwards compat.
+		if len(r.Execution.Findings) == 0 {
+			for _, sf := range output.StructuredFindings {
+				r.Execution.Findings = append(r.Execution.Findings, sf.Message)
+			}
+		}
+	}
 	return withTiming(r, start, metav1.Now())
 }
 
