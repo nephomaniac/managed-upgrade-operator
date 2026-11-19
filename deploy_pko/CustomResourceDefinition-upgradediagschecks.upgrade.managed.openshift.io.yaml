@@ -284,6 +284,65 @@ spec:
                         required:
                           - state
                         type: object
+                      structuredFindings:
+                        description: StructuredFindings provides rich, machine-readable finding details. When present, UIs should prefer this over parsing string findings.
+                        items:
+                          description: StructuredFinding provides rich, structured information about a specific issue.
+                          properties:
+                            message:
+                              description: Message is the human-readable description of this finding.
+                              type: string
+                            severity:
+                              description: Severity indicates the priority/impact of this finding.
+                              enum:
+                                - critical
+                                - high
+                                - medium
+                                - low
+                              type: string
+                            owner:
+                              description: Owner identifies who is responsible for resolving this finding.
+                              enum:
+                                - customer
+                                - service-team
+                              type: string
+                            ownerLabel:
+                              description: OwnerLabel is the user-facing text for this finding's owner.
+                              type: string
+                            action:
+                              description: Action is the specific remediation step for this finding.
+                              type: string
+                            resource:
+                              description: Resource identifies the specific Kubernetes resource this finding relates to.
+                              properties:
+                                kind:
+                                  description: Kind is the Kubernetes resource kind.
+                                  type: string
+                                namespace:
+                                  description: Namespace is the resource namespace.
+                                  type: string
+                                name:
+                                  description: Name is the resource name.
+                                  type: string
+                                apiVersion:
+                                  description: APIVersion is the resource API version.
+                                  type: string
+                              required:
+                                - kind
+                                - name
+                              type: object
+                            documentationURL:
+                              description: DocumentationURL provides a link to relevant docs or SOPs.
+                              type: string
+                            metadata:
+                              additionalProperties:
+                                type: string
+                              description: Metadata provides additional structured context as key-value pairs.
+                              type: object
+                          required:
+                            - message
+                          type: object
+                        type: array
                     required:
                       - execution
                       - name

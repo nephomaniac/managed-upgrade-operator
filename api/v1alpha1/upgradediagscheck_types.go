@@ -103,6 +103,74 @@ type CheckExecution struct {
 	Error string `json:"error,omitempty"`
 }
 
+// FindingSeverity indicates the priority/impact of a structured finding.
+// +kubebuilder:validation:Enum={"critical","high","medium","low"}
+type FindingSeverity string
+
+const (
+	// FindingSeverityCritical means the upgrade will likely fail or cause an outage.
+	FindingSeverityCritical FindingSeverity = "critical"
+	// FindingSeverityHigh means significant risk; should be addressed before upgrade.
+	FindingSeverityHigh FindingSeverity = "high"
+	// FindingSeverityMedium means moderate risk; monitor during upgrade.
+	FindingSeverityMedium FindingSeverity = "medium"
+	// FindingSeverityLow means minor issue; informational only.
+	FindingSeverityLow FindingSeverity = "low"
+)
+
+// ResourceReference identifies a specific Kubernetes resource related to a finding.
+type ResourceReference struct {
+	// Kind is the Kubernetes resource kind (e.g., "PodDisruptionBudget").
+	Kind string `json:"kind"`
+
+	// Namespace is the resource namespace (empty for cluster-scoped resources).
+	// +kubebuilder:validation:Optional
+	Namespace string `json:"namespace,omitempty"`
+
+	// Name is the resource name.
+	Name string `json:"name"`
+
+	// APIVersion is the resource API version (e.g., "policy/v1").
+	// +kubebuilder:validation:Optional
+	APIVersion string `json:"apiVersion,omitempty"`
+}
+
+// StructuredFinding provides rich, structured information about a specific issue.
+// When present, UIs should prefer this over parsing the string Findings list.
+type StructuredFinding struct {
+	// Message is the human-readable description of this finding (required).
+	Message string `json:"message"`
+
+	// Severity indicates the priority/impact of this specific finding.
+	// +kubebuilder:validation:Optional
+	Severity FindingSeverity `json:"severity,omitempty"`
+
+	// Owner identifies who is responsible for resolving THIS finding.
+	// Overrides the check-level Owner when present.
+	// +kubebuilder:validation:Optional
+	Owner CheckOwner `json:"owner,omitempty"`
+
+	// OwnerLabel is the user-facing text for this finding's owner.
+	// +kubebuilder:validation:Optional
+	OwnerLabel string `json:"ownerLabel,omitempty"`
+
+	// Action is the specific remediation step for THIS finding.
+	// +kubebuilder:validation:Optional
+	Action string `json:"action,omitempty"`
+
+	// Resource identifies the specific Kubernetes resource this finding relates to.
+	// +kubebuilder:validation:Optional
+	Resource *ResourceReference `json:"resource,omitempty"`
+
+	// DocumentationURL provides a link to relevant docs or SOPs.
+	// +kubebuilder:validation:Optional
+	DocumentationURL string `json:"documentationURL,omitempty"`
+
+	// Metadata provides additional structured context as key-value pairs.
+	// +kubebuilder:validation:Optional
+	Metadata map[string]string `json:"metadata,omitempty"`
+}
+
 // DiagsCheckResult holds the result and execution details for a single diagnostics check.
 type DiagsCheckResult struct {
 	// Name identifies the check (e.g. "CriticalAlerts", "ClusterOperators").
@@ -133,6 +201,11 @@ type DiagsCheckResult struct {
 
 	// Execution contains runtime information about how the check ran.
 	Execution CheckExecution `json:"execution"`
+
+	// StructuredFindings provides rich, machine-readable finding details.
+	// When present, UIs should prefer this over parsing string Findings.
+	// +kubebuilder:validation:Optional
+	StructuredFindings []StructuredFinding `json:"structuredFindings,omitempty"`
 }
 
 const (

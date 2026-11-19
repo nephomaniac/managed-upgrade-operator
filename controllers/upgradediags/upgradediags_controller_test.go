@@ -16,10 +16,12 @@ import (
 	"github.com/openshift/managed-upgrade-operator/util/mocks"
 	"go.uber.org/mock/gomock"
 	appsv1 "k8s.io/api/apps/v1"
+	certificatesv1 "k8s.io/api/certificates/v1"
 	corev1 "k8s.io/api/core/v1"
 	policyv1 "k8s.io/api/policy/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
@@ -193,6 +195,10 @@ var _ = Describe("PreflightController", func() {
 				mockClient.EXPECT().Status().Return(mockSubResourceClient)
 				mockSubResourceClient.EXPECT().Update(gomock.Any(), gomock.Any()).Return(nil)
 
+				// Infrastructure CR fetch (best-effort — return error so controller skips the identifier)
+				mockClient.EXPECT().Get(gomock.Any(), types.NamespacedName{Name: "cluster"}, gomock.AssignableToTypeOf(&unstructured.Unstructured{})).
+					Return(fmt.Errorf("infrastructure not found"))
+
 				// check calls (all checks enabled)
 				mockCvBuilder.EXPECT().New(gomock.Any()).Return(mockCv).AnyTimes()
 				mockCv.EXPECT().GetClusterVersion().Return(&configv1.ClusterVersion{}, nil).Times(6) // ClusterVersion + UpgradeTarget + UpgradeTargetExtended + UpgradeInFlight + UpgradeableCondition + AdminAcks
@@ -206,17 +212,26 @@ var _ = Describe("PreflightController", func() {
 				mockMetrics.EXPECT().UpdateMetricHealthcheckSucceeded(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).AnyTimes()
 				mockMetrics.EXPECT().UpdateMetricHealthcheckFailed(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).AnyTimes()
 				// node list: 2 extended (MCN + NT) + 2 baseline (MCN + NT via upgraders) + 1 PDB master/infra
+				//           + 1 WorkerNodeReadiness + 1 StuckDrainingNodes (returns early with empty list)
 				mockClient.EXPECT().List(gomock.Any(), gomock.AssignableToTypeOf(&corev1.NodeList{}), gomock.Any()).
-					Return(nil).Times(5)
-				// pod list: 1 for PDB master/infra extended check
+					Return(nil).Times(7)
+				// pod list: 1 for PDB master/infra extended + 1 StuckTerminatingPods
+				// (StuckDrainingNodes returns early since node list is empty)
 				mockClient.EXPECT().List(gomock.Any(), gomock.AssignableToTypeOf(&corev1.PodList{}), gomock.Any()).
-					Return(nil)
+					Return(nil).Times(2)
 				// daemonset list: 1 for PDB master/infra extended check
 				mockClient.EXPECT().List(gomock.Any(), gomock.AssignableToTypeOf(&appsv1.DaemonSetList{}), gomock.Any()).
 					Return(nil)
-				// PDB list: 1 master/infra extended + 1 baseline (via upgraders.HealthCheckPDB)
+				// PDB list: 1 master/infra extended + 1 baseline (via upgraders.HealthCheckPDB) + 1 PdbDrainSafety
+				// (StuckDrainingNodes returns early since node list is empty → no PDB list needed there)
 				mockClient.EXPECT().List(gomock.Any(), gomock.AssignableToTypeOf(&policyv1.PodDisruptionBudgetList{}), gomock.Any()).
-					Return(nil).Times(2)
+					Return(nil).Times(3)
+				// CSR list: 1 for PendingCSRs check
+				mockClient.EXPECT().List(gomock.Any(), gomock.AssignableToTypeOf(&certificatesv1.CertificateSigningRequestList{}), gomock.Any()).
+					Return(nil)
+				// UnstructuredList: PausedMachineConfigPool + InstalledOperatorMaxVersion + ConsolePluginReferences
+				mockClient.EXPECT().List(gomock.Any(), gomock.AssignableToTypeOf(&unstructured.UnstructuredList{}), gomock.Any()).
+					Return(nil).Times(3)
 				// baseline PDB DVO check
 				mockDvoClientBuilder.EXPECT().New(gomock.Any()).Return(mockDvoClient, nil)
 				mockDvoClient.EXPECT().GetMetrics().Return([]byte(""), nil)
@@ -234,6 +249,12 @@ var _ = Describe("PreflightController", func() {
 				// AdminAcks: reads admin-acks ConfigMap
 				mockClient.EXPECT().Get(gomock.Any(), types.NamespacedName{Namespace: "openshift-config", Name: "admin-acks"}, gomock.AssignableToTypeOf(&corev1.ConfigMap{})).
 					Return(nil)
+				// ClusterAutoscalerConfig: Get("default") — non-NotFound error → check returns Error (graceful)
+				mockClient.EXPECT().Get(gomock.Any(), types.NamespacedName{Name: "default"}, gomock.AssignableToTypeOf(&unstructured.Unstructured{})).
+					Return(fmt.Errorf("cluster autoscaler not found"))
+				// UpgradeConfigConsistency: UpgradeConfig not found → check returns Passed
+				mockClient.EXPECT().Get(gomock.Any(), types.NamespacedName{Namespace: "openshift-managed-upgrade-operator", Name: "managed-upgrade-config"}, gomock.AssignableToTypeOf(&upgradev1alpha1.UpgradeConfig{})).
+					Return(apierrors.NewNotFound(schema.GroupResource{Group: "upgrade.managed.openshift.io", Resource: "upgradeconfigs"}, "managed-upgrade-config"))
 
 				// CompletedAt update
 				mockClient.EXPECT().Status().Return(mockSubResourceClient)
