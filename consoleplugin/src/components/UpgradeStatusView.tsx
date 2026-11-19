@@ -1004,8 +1004,6 @@ const UpgradePhaseStepper: React.FC<{
   preflightIssues: DiagsCheckResult[];
   onRunCheckRequested?: (version: string, channel: string) => void;
 }> = ({ snapshot, matchingCheck, preflightIssues, onRunCheckRequested }) => {
-  const [selectedStation, setSelectedStation] = React.useState<string | null>(null);
-
   const isFailed = snapshot.phase === 'failed';
 
   // Determine the "effective current phase" for getStepStatus when phase=failed.
@@ -1016,6 +1014,17 @@ const UpgradePhaseStepper: React.FC<{
       : snapshot.controlPlane?.phase === 'complete' ? 'operators'
       : 'control-plane')
     : snapshot.phase;
+
+  // Auto-open the currently active (or failed) station on mount.
+  const [selectedStation, setSelectedStation] = React.useState<string | null>(() => {
+    if (snapshot.phase === 'failed') return effectivePhase;
+    if (STEP_PHASE_ORDER.includes(snapshot.phase)
+        && snapshot.phase !== 'not-started'
+        && snapshot.phase !== 'complete') {
+      return snapshot.phase;
+    }
+    return null;
+  });
 
   // Worker aggregate counts
   const totalWorkerNodes   = (snapshot.machinePools ?? []).reduce((a, p) => a + p.total, 0);
@@ -1076,6 +1085,7 @@ const UpgradePhaseStepper: React.FC<{
     setSelectedStation(prev => prev === id ? null : id);
 
   return (
+
     <div style={{
       border: `1px solid ${T.border}`,
       borderRadius: T.radiusLg,
@@ -1392,6 +1402,8 @@ export const UpgradeStatusView: React.FC<UpgradeStatusViewProps> = ({ onRunCheck
 
   React.useEffect(() => {
     fetchStatus();
+    const interval = setInterval(() => fetchStatus(), 30_000);
+    return () => clearInterval(interval);
   }, [fetchStatus]);
 
   const cardStyle: React.CSSProperties = {
@@ -1486,31 +1498,6 @@ export const UpgradeStatusView: React.FC<UpgradeStatusViewProps> = ({ onRunCheck
                   </div>
                 </div>
               )}
-              {/* Phase strip */}
-              <div style={{ marginLeft: 'auto', display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
-                {(['control-plane', 'operators', 'worker-upgrade'] as const).map((ph) => {
-                  const done = snapshot.phase === 'complete'
-                    || (ph === 'control-plane' && ['operators', 'worker-upgrade', 'complete'].includes(snapshot.phase))
-                    || (ph === 'operators' && ['worker-upgrade', 'complete'].includes(snapshot.phase));
-                  const active = snapshot.phase === ph;
-                  const color = done ? T.success : active ? T.info : T.textSubtle;
-                  return (
-                    <React.Fragment key={ph}>
-                      {ph !== 'control-plane' && (
-                        <span style={{ color: T.textSubtle, fontSize: 12 }}>→</span>
-                      )}
-                      <span style={{
-                        fontSize: 11, fontWeight: 600,
-                        color,
-                        borderBottom: active ? `2px solid ${color}` : '2px solid transparent',
-                        paddingBottom: 1,
-                      }}>
-                        {phaseLabel(ph)}
-                      </span>
-                    </React.Fragment>
-                  );
-                })}
-              </div>
             </div>
             {snapshot.cvoMessage && (
               <div style={{
