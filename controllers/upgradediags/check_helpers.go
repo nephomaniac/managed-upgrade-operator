@@ -133,6 +133,15 @@ func withTiming(r upgradev1alpha1.DiagsCheckResult, start, end metav1.Time) upgr
 
 func withOwner(r upgradev1alpha1.DiagsCheckResult, owner upgradev1alpha1.CheckOwner) upgradev1alpha1.DiagsCheckResult {
 	r.Owner = owner
+	// Set the user-facing label so the console plugin doesn't need to translate codes
+	switch owner {
+	case upgradev1alpha1.OwnerCustomer:
+		r.OwnerLabel = "Admin action required"
+	case upgradev1alpha1.OwnerServiceTeam:
+		r.OwnerLabel = "Red Hat action required"
+	default:
+		r.OwnerLabel = ""
+	}
 	return r
 }
 

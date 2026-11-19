@@ -1,0 +1,336 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.20.0
+  name: upgradediagschecks.upgrade.managed.openshift.io
+spec:
+  group: upgrade.managed.openshift.io
+  names:
+    kind: UpgradeDiagsCheck
+    listKind: UpgradeDiagsCheckList
+    plural: upgradediagschecks
+    shortNames:
+    - udc
+    singular: upgradediagscheck
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.desired.version
+      name: version
+      type: string
+    - jsonPath: .spec.desired.channel
+      name: channel
+      type: string
+    - jsonPath: .spec.type
+      name: type
+      type: string
+    - description: Overall check result
+      jsonPath: .status.overallResult
+      name: status
+      type: string
+    - jsonPath: .status.checksPassed
+      name: passed
+      type: integer
+    - jsonPath: .status.checksWarned
+      name: warned
+      type: integer
+    - jsonPath: .status.checksFailed
+      name: failed
+      type: integer
+    - jsonPath: .status.completedAt
+      name: completed
+      type: string
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          UpgradeDiagsCheck is the Schema for on-demand cluster upgrade diagnostics checks.
+          Creating one runs pre-upgrade health checks without scheduling or starting an upgrade.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: |-
+              UpgradeDiagsCheckSpec defines the target upgrade to run diagnostics for.
+              It embeds UpgradeConfigSpec so that all UpgradeConfig fields (type, desired version,
+              PDBForceDrainTimeout, etc.) are inherited automatically.
+            properties:
+              PDBForceDrainTimeout:
+                description: The maximum grace period granted to a node whose drain
+                  is blocked by a Pod Disruption Budget, before that drain is forced.
+                  Measured in minutes. The minimum accepted value is 0 and in this
+                  case it will trigger force drain after the expectedNodeDrainTime
+                  lapsed.
+                format: int32
+                minimum: 0
+                type: integer
+              capacityReservation:
+                description: Specify if scaling up an extra node for capacity reservation
+                  before upgrade starts is needed
+                type: boolean
+              checks:
+                description: |-
+                  Checks is an optional allowlist of check names to run. When empty, all checks run.
+                  Checks not in this list are recorded with Result=Skipped.
+                items:
+                  type: string
+                type: array
+              defaultCheckTimeoutSeconds:
+                default: 30
+                description: |-
+                  DefaultCheckTimeoutSeconds is the per-check timeout fallback used when a check
+                  does not declare its own timeout. Defaults to 30 seconds.
+                format: int32
+                type: integer
+              desired:
+                description: Specify the desired OpenShift release
+                properties:
+                  channel:
+                    description: Channel used for upgrades
+                    type: string
+                  image:
+                    description: Image reference used for upgrades
+                    type: string
+                  version:
+                    description: Version of openshift release
+                    type: string
+                type: object
+              overallTimeoutSeconds:
+                description: |-
+                  OverallTimeoutSeconds is the maximum total wall-clock time allowed for all checks
+                  to complete. If this deadline is reached, any checks that have not yet started are
+                  recorded with Result=TimedOut. Checks already running receive a cancelled context
+                  and are recorded as Result=Error. When 0 (default), there is no overall deadline.
+                format: int32
+                type: integer
+              type:
+                description: Type indicates the ClusterUpgrader implementation to
+                  use to perform an upgrade of the cluster
+                enum:
+                - OSD
+                - ARO
+                type: string
+              upgradeAt:
+                description: Specify the upgrade start time
+                type: string
+            required:
+            - PDBForceDrainTimeout
+            - desired
+            - type
+            - upgradeAt
+            type: object
+          status:
+            description: UpgradeDiagsCheckStatus reports the outcome of all diagnostics
+              checks.
+            properties:
+              apiServerURL:
+                description: APIServerURL is the cluster's API server URL (Infrastructure.status.apiServerURL).
+                type: string
+              checks:
+                items:
+                  description: DiagsCheckResult holds the result and execution details
+                    for a single diagnostics check.
+                  properties:
+                    action:
+                      description: Action is the recommended next step when Result
+                        is Failed or Error.
+                      type: string
+                    description:
+                      description: Description is a human-readable explanation of
+                        what this check validates and why it matters.
+                      type: string
+                    execution:
+                      description: Execution contains runtime information about how
+                        the check ran.
+                      properties:
+                        completedAt:
+                          description: CompletedAt is when this individual check finished
+                            executing.
+                          format: date-time
+                          type: string
+                        error:
+                          description: Error contains the reason a check could not
+                            run (State=Error only).
+                          type: string
+                        findings:
+                          description: Findings contains detailed per-item observations
+                            from the check.
+                          items:
+                            type: string
+                          type: array
+                        startedAt:
+                          description: StartedAt is when this individual check began
+                            executing.
+                          format: date-time
+                          type: string
+                        state:
+                          description: 'State is whether the check machinery ran successfully:
+                            Completed, Error, or Skipped.'
+                          enum:
+                          - Completed
+                          - Error
+                          - Skipped
+                          - TimedOut
+                          type: string
+                        summary:
+                          description: Summary is a concise human-readable explanation
+                            of what the check found.
+                          type: string
+                      required:
+                      - state
+                      type: object
+                    name:
+                      description: Name identifies the check (e.g. "CriticalAlerts",
+                        "ClusterOperators").
+                      type: string
+                    owner:
+                      description: Owner identifies who is responsible for resolving
+                        this check when it fails or errors.
+                      enum:
+                      - customer
+                      - service-team
+                      type: string
+                    ownerLabel:
+                      description: |-
+                        OwnerLabel is the user-facing display text for who is responsible (e.g., "Admin action required").
+                        If present, UIs should display this instead of translating the Owner field.
+                      type: string
+                    result:
+                      description: 'Result is the health verdict: Passed, Failed,
+                        Error, Skipped, or Unknown.'
+                      enum:
+                      - Passed
+                      - Warning
+                      - Failed
+                      - Error
+                      - Skipped
+                      - TimedOut
+                      - Unknown
+                      type: string
+                    timeoutSeconds:
+                      description: TimeoutSeconds is the timeout that was applied
+                        to this check.
+                      format: int32
+                      type: integer
+                  required:
+                  - execution
+                  - name
+                  - result
+                  - timeoutSeconds
+                  type: object
+                type: array
+              checksErrored:
+                type: integer
+              checksFailed:
+                type: integer
+              checksPassed:
+                type: integer
+              checksWarned:
+                type: integer
+              clusterInfraName:
+                description: |-
+                  ClusterInfraName is the cluster's infrastructure name (Infrastructure.status.infrastructureName).
+                  Populated at run time so results are unambiguously tied to the cluster that produced them.
+                type: string
+              completedAt:
+                format: date-time
+                type: string
+              conditions:
+                description: Conditions exposes the run state as standard Kubernetes
+                  conditions.
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
+              overallResult:
+                description: OverallResult is the top-level verdict once all checks
+                  are complete.
+                enum:
+                - Passed
+                - Warning
+                - Failed
+                - Error
+                - Skipped
+                - TimedOut
+                - Unknown
+                type: string
+              startedAt:
+                format: date-time
+                type: string
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

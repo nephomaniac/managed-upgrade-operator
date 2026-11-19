@@ -18,6 +18,7 @@ export interface DiagsCheckResult {
   description?: string;
   result: CheckResult;
   owner?: CheckOwner;
+  ownerLabel?: string;
   action?: string;
   timeoutSeconds: number;
   execution: CheckExecution;

@@ -79,7 +79,7 @@ const SummaryBanner: React.FC<{
       </div>
       {customerItems.length > 0 && (
         <div style={{ fontSize: 13, marginBottom: 4 }}>
-          <strong>Customer action required:</strong>{' '}
+          <strong>Admin action required:</strong>{' '}
           {customerItems.map(c => humanize(c.name)).join(', ')}
         </div>
       )}
@@ -101,11 +101,14 @@ const SummaryBanner: React.FC<{
 
 // Expanded check row content
 const CheckRowDetail: React.FC<{ c: DiagsCheckResult }> = ({ c }) => {
-  const ownerLabel = c.owner === 'customer'
-    ? 'Customer action required'
-    : c.owner === 'service-team'
-    ? 'Red Hat action required'
-    : null;
+  // Prefer backend-provided ownerLabel, fall back to client-side translation for backwards compatibility
+  const ownerLabel = c.ownerLabel || (
+    c.owner === 'customer'
+      ? 'Admin action required'
+      : c.owner === 'service-team'
+      ? 'Red Hat action required'
+      : null
+  );
 
   const hasContent = c.execution.summary || c.action || c.execution.error ||
     (c.execution.findings && c.execution.findings.length > 0) || ownerLabel;

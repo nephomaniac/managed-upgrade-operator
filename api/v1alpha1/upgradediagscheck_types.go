@@ -119,6 +119,11 @@ type DiagsCheckResult struct {
 	// +kubebuilder:validation:Optional
 	Owner CheckOwner `json:"owner,omitempty"`
 
+	// OwnerLabel is the user-facing display text for who is responsible (e.g., "Admin action required").
+	// If present, UIs should display this instead of translating the Owner field.
+	// +kubebuilder:validation:Optional
+	OwnerLabel string `json:"ownerLabel,omitempty"`
+
 	// Action is the recommended next step when Result is Failed or Error.
 	// +kubebuilder:validation:Optional
 	Action string `json:"action,omitempty"`

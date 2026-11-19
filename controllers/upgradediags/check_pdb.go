@@ -17,7 +17,7 @@ import (
 const (
 	descPodDisruptionBudgets = "Checks for PDBs that block node drains, using the same HealthCheckPDB function MUO calls during upgrades. Combines direct PDB inspection with DVO metrics."
 	descPDBMasterInfra       = "Identifies PodDisruptionBudgets that could block master or infra node drain during an upgrade. Scans two sources: (1) pods currently running on master/infra nodes, and (2) DaemonSet pod templates that tolerate master/infra taints and will always be present on those nodes. Only flags PDBs that are restrictive (MaxUnavailable=0 or MinAvailable=100%) and are confirmed to cover workloads on those nodes."
-	descPDBDrainSafety       = "Surfaces per-PDB status.currentHealthy, status.desiredHealthy, and status.disruptionsAllowed to identify PDBs that will block node drain during upgrade. Applies the MCS-252 four-case safety predicate: a PDB with disruptionsAllowed=0 and currentHealthy>0 will stall drain until PDBForceDrainTimeout expires; a PDB with currentHealthy=0 is protecting no pods and is safe to bypass. Control-plane PDBs (openshift-etcd, openshift-kube-apiserver, etc.) are classified as Red Hat-owned; all others are customer-owned. Source: MCS-252/253 (control-plane drain safety) and ROSAENG-66714."
+	descPDBDrainSafety       = "Surfaces per-PDB status.currentHealthy, status.desiredHealthy, and status.disruptionsAllowed to identify PDBs that will block node drain during upgrade. Applies the MCS-252 four-case safety predicate: a PDB with disruptionsAllowed=0 and currentHealthy>0 will stall drain until PDBForceDrainTimeout expires; a PDB with currentHealthy=0 is protecting no pods and is safe to bypass. Control-plane PDBs (openshift-etcd, openshift-kube-apiserver, etc.) are classified as Red Hat-owned; all others are admin-owned. Source: MCS-252/253 (control-plane drain safety) and ROSAENG-66714."
 )
 
 type podDisruptionBudgetsCheck struct{}
@@ -385,7 +385,7 @@ func (c *pdbDrainSafetyCheck) Run(ctx context.Context, deps CheckDependencies, l
 			Summary:  fmt.Sprintf("%d PDB(s) will stall node drain (disruptionsAllowed=0, currentHealthy>0)", len(blocking)),
 			Findings: findings,
 			Owner:    owner,
-			Action:   "MUO will wait up to PDBForceDrainTimeout minutes before force-draining. For customer PDBs: coordinate with the application owner to scale up pods or temporarily relax the PDB. For Red Hat PDBs: contact Red Hat support.",
+			Action:   "MUO will wait up to PDBForceDrainTimeout minutes before force-draining. For admin PDBs: coordinate with the application owner to scale up pods or temporarily relax the PDB. For Red Hat PDBs: contact Red Hat support.",
 		}
 	}
 

@@ -175,7 +175,7 @@ func (c *stuckDrainingNodesCheck) Run(ctx context.Context, deps CheckDependencie
 			Action: "Review per-pod root causes above. " +
 				"PDB-blocked: use 'oc adm drain <node> --disable-eviction' to bypass PDB enforcement by switching to plain pod delete " +
 				"(--force does NOT bypass PDBs — it is enforced server-side; this is a known SOP error per MCS-251). " +
-				"Only bypass after confirming currentHealthy=0 or after customer coordination (see PodDisruptionBudgetsDrainSafety findings). " +
+				"Only bypass after confirming currentHealthy=0 or after cluster admin coordination (see PodDisruptionBudgetsDrainSafety findings). " +
 				"Finalizer-stuck: identify and remediate the responsible controller (storage driver, network plugin, operator). " +
 				"Long-terminating: 'oc delete pod <name> -n <ns> --grace-period=0 --force' after confirming it is safe.",
 		}
