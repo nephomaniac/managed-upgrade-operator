@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -143,9 +144,15 @@ type NodeStatus struct {
 	Phase         string       `json:"phase"`
 	CurrentConfig string       `json:"currentConfig,omitempty"`
 	DesiredConfig string       `json:"desiredConfig,omitempty"`
+	// Roles lists node-role.kubernetes.io/* labels (e.g. master, infra, worker).
+	Roles []string `json:"roles,omitempty"`
 	// PhaseSince is when the node entered its current phase (from MachineConfig state annotation change).
 	PhaseSince     *metav1.Time  `json:"phaseSince,omitempty"`
+	// ElapsedSeconds is seconds since the NodeReady condition last transitioned.
+	// For upgrading nodes this approximates time in the current upgrade phase.
 	ElapsedSeconds int64         `json:"elapsedSeconds,omitempty"`
+	// AgeSeconds is seconds since the node was created (node.CreationTimestamp).
+	AgeSeconds     int64         `json:"ageSeconds,omitempty"`
 	// DrainBlockers lists PDBs actively preventing this node's drain.
 	// Only populated when phase is "draining" or "working".
 	DrainBlockers  []DrainBlocker  `json:"drainBlockers,omitempty"`
@@ -614,10 +621,24 @@ func buildNodeStatus(node corev1.Node, nodePods []corev1.Pod, pdbs []policyv1.Po
 	if ann == nil {
 		ann = map[string]string{}
 	}
+	// Collect node roles from node-role.kubernetes.io/* labels.
+	var roles []string
+	for label := range node.Labels {
+		if strings.HasPrefix(label, "node-role.kubernetes.io/") {
+			role := strings.TrimPrefix(label, "node-role.kubernetes.io/")
+			if role != "" {
+				roles = append(roles, role)
+			}
+		}
+	}
+	sort.Strings(roles)
+
 	ns := NodeStatus{
 		Name:           node.Name,
 		CurrentConfig:  ann["machineconfiguration.openshift.io/currentConfig"],
 		DesiredConfig:  ann["machineconfiguration.openshift.io/desiredConfig"],
+		Roles:          roles,
+		AgeSeconds:     int64(now.Sub(node.CreationTimestamp.Time).Seconds()),
 		ProviderErrors: providerErrors,
 	}
 

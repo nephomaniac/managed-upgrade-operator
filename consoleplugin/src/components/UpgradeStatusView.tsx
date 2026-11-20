@@ -60,8 +60,10 @@ interface NodeStatus {
   phase: string;
   currentConfig?: string;
   desiredConfig?: string;
+  roles?: string[];
   phaseSince?: string;
   elapsedSeconds?: number;
+  ageSeconds?: number;
   drainBlockers?: DrainBlocker[];
   providerErrors?: ProviderError[];
   conditions?: NodeCondition[];
@@ -496,6 +498,24 @@ const NodeDetailPanel: React.FC<{ node: NodeStatus; borderColor: string }> = ({ 
   );
 };
 
+const roleColor = (role: string): string => {
+  if (role === 'master' || role === 'control-plane') return T.info;
+  if (role === 'infra') return T.warning;
+  return T.textSubtle; // worker and others
+};
+
+// Format an age in seconds into a human-readable string with appropriate
+// granularity: seconds, minutes, hours, or days+hours.
+const fmtAge = (secs?: number): string => {
+  if (secs === undefined || secs <= 0) return '—';
+  if (secs < 120)   return `${secs}s`;
+  if (secs < 3600)  return `${Math.floor(secs / 60)}m`;
+  if (secs < 86400) return `${Math.floor(secs / 3600)}h ${Math.floor((secs % 3600) / 60)}m`;
+  const d = Math.floor(secs / 86400);
+  const h = Math.floor((secs % 86400) / 3600);
+  return h > 0 ? `${d}d ${h}h` : `${d}d`;
+};
+
 const NodeTable: React.FC<{ nodes: NodeStatus[] }> = ({ nodes }) => {
   const [expandedNodes, setExpandedNodes] = React.useState<Record<string, boolean>>({});
   const toggleNode = (name: string) => setExpandedNodes(prev => ({ ...prev, [name]: !prev[name] }));
@@ -512,10 +532,11 @@ const NodeTable: React.FC<{ nodes: NodeStatus[] }> = ({ nodes }) => {
     <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
       <colgroup>
         <col style={{ width: 28 }} />
-        <col style={{ width: '28%' }} />
+        <col style={{ width: '30%' }} />
         <col style={{ width: 90 }} />
         <col style={{ width: 90 }} />
-        <col style={{ width: 90 }} />
+        <col style={{ width: 80 }} />
+        <col style={{ width: 80 }} />
         <col />
       </colgroup>
       <thead>
@@ -524,7 +545,8 @@ const NodeTable: React.FC<{ nodes: NodeStatus[] }> = ({ nodes }) => {
           <th style={th}>Node</th>
           <th style={th}>Phase</th>
           <th style={th}>Config</th>
-          <th style={th}>Elapsed</th>
+          <th style={th}>In Phase</th>
+          <th style={th}>Node Age</th>
           <th style={th}>Issues</th>
         </tr>
       </thead>
@@ -556,8 +578,24 @@ const NodeTable: React.FC<{ nodes: NodeStatus[] }> = ({ nodes }) => {
                 <td style={{ ...tdBase, padding: '7px 4px', textAlign: 'center', color: T.textMuted, fontSize: 11 }}>
                   {hasDetail ? (isExpanded ? '▾' : '▸') : ''}
                 </td>
-                <td style={{ ...tdBase, fontFamily: 'monospace', fontSize: 11, wordBreak: 'break-all' }}>
-                  {node.name}
+                <td style={{ ...tdBase, wordBreak: 'break-all' }}>
+                  <div style={{ fontFamily: 'monospace', fontSize: 11 }}>{node.name}</div>
+                  {node.roles && node.roles.length > 0 && (
+                    <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginTop: 3 }}>
+                      {node.roles.map(role => (
+                        <span key={role} style={{
+                          fontSize: 10, fontWeight: 600, padding: '1px 6px',
+                          borderRadius: T.radiusPill,
+                          background: `${roleColor(role)}22`,
+                          color: roleColor(role),
+                          border: `1px solid ${roleColor(role)}55`,
+                          textTransform: 'capitalize',
+                        }}>
+                          {role}
+                        </span>
+                      ))}
+                    </div>
+                  )}
                 </td>
                 <td style={tdBase}><PhaseBadge phase={node.phase} /></td>
                 <td style={tdBase}>
@@ -568,8 +606,13 @@ const NodeTable: React.FC<{ nodes: NodeStatus[] }> = ({ nodes }) => {
                       </span>
                   }
                 </td>
+                {/* In Phase: how long this node has been in its current upgrade phase */}
                 <td style={{ ...tdBase, color: T.textSubtle, whiteSpace: 'nowrap' }}>
                   {fmtElapsed(node.elapsedSeconds)}
+                </td>
+                {/* Node Age: time since node was created */}
+                <td style={{ ...tdBase, color: T.textMuted, whiteSpace: 'nowrap' }}>
+                  {fmtAge(node.ageSeconds)}
                 </td>
                 <td style={tdBase}>
                   {hasBlockers && (
@@ -588,7 +631,7 @@ const NodeTable: React.FC<{ nodes: NodeStatus[] }> = ({ nodes }) => {
 
               {isExpanded && (
                 <tr style={{ borderLeft: `3px solid ${nc}`, borderBottom: `1px solid ${T.border}` }}>
-                  <td colSpan={6} style={{ padding: 0 }}>
+                  <td colSpan={7} style={{ padding: 0 }}>
                     <NodeDetailPanel node={node} borderColor={nc} />
                   </td>
                 </tr>
