@@ -176,7 +176,7 @@ const PHASE_COLORS: Record<string, string> = {
   'working':        T.info,
   'rebooting':      T.warning,
   'draining':       T.warning,
-  'pre-checks':     T.warning,
+  'pre-checks':     T.info,
   'stalled':        T.warning,
   'degraded':       T.danger,
   'failed':         T.danger,
@@ -891,8 +891,9 @@ const MachineHealthChecksCard: React.FC<{ mhcs: MachineHealthCheckStatus[] }> = 
 
 type StepperStatus = 'done' | 'active' | 'pending' | 'failed' | 'warning' | 'skipped';
 
-// Phase order for upgrade progress. 'failed' is not in the sequence (handled separately).
-const STEP_PHASE_ORDER = ['not-started', 'pre-checks', 'control-plane', 'operators', 'worker-upgrade', 'complete'];
+// Phase order for upgrade progress — the actual upgrade execution sequence.
+// Pre-checks are advisory (not a phase) and are surfaced separately via the diagnostics banner.
+const STEP_PHASE_ORDER = ['not-started', 'control-plane', 'operators', 'worker-upgrade', 'complete'];
 
 
 // Context type describing how relevant a preflight check snapshot is relative to the current
@@ -967,99 +968,6 @@ const StepIcon: React.FC<{ status: StepperStatus }> = ({ status }) => {
   );
 };
 
-// Pre-checks detail panel (shown when the Pre-checks station is expanded in the stepper).
-const PreChecksStationDetail: React.FC<{
-  matchingCheck: UpgradeDiagsCheck | null;
-  preflightIssues: DiagsCheckResult[];
-  onRunCheckRequested?: (version: string, channel: string) => void;
-  targetVersion?: string;
-  targetChannel?: string;
-}> = ({ matchingCheck, preflightIssues, onRunCheckRequested, targetVersion, targetChannel }) => {
-  if (!matchingCheck) {
-    const hasTarget = !!targetVersion;
-    return (
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-        <div style={{ flex: 1, fontSize: 13, color: T.textSubtle }}>
-          {hasTarget
-            ? <>No diagnostics check found for <strong>{targetVersion}</strong>. Run a check to identify potential roadblocks before or during this upgrade.</>
-            : <>No upgrade is currently scheduled. Run a diagnostics check at any time to validate cluster readiness before planning an upgrade.</>
-          }
-        </div>
-        {onRunCheckRequested && targetVersion && (
-          <Button
-            variant="primary" size="sm"
-            onClick={() => onRunCheckRequested(targetVersion, targetChannel ?? '')}
-            style={{ borderRadius: T.radiusMd, whiteSpace: 'nowrap' }}
-          >
-            Run Check for {targetVersion}
-          </Button>
-        )}
-      </div>
-    );
-  }
-
-  const s = matchingCheck.status;
-  const totalChecks = s?.checks?.length ?? 0;
-  const passed  = s?.checksPassed  ?? 0;
-  const failed  = s?.checksFailed  ?? 0;
-  const warned  = s?.checksWarned  ?? 0;
-  const errored = s?.checksErrored ?? 0;
-
-  return (
-    <div>
-      <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', alignItems: 'center', marginBottom: preflightIssues.length > 0 ? 10 : 0 }}>
-        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-          {([
-            { n: passed,  label: 'passed',  color: T.success },
-            { n: failed,  label: 'failed',  color: T.danger },
-            { n: warned,  label: 'warned',  color: T.warning },
-            { n: errored, label: 'error',   color: T.warning },
-          ] as Array<{ n: number; label: string; color: string }>).map(({ n, label, color }) => n > 0 ? (
-            <span key={label} style={{
-              display: 'inline-flex', alignItems: 'center', gap: 4,
-              padding: '2px 10px', borderRadius: T.radiusPill, fontWeight: 600, fontSize: 12,
-              background: `${color}22`, color, border: `1px solid ${color}55`,
-            }}>
-              {n} {label}
-            </span>
-          ) : null)}
-          <span style={{ fontSize: 12, color: T.textMuted }}>{totalChecks} total checks</span>
-        </div>
-        <span style={{ fontSize: 12, color: T.textSubtle, marginLeft: 'auto' }}>
-          See <strong>Diagnostics Checks</strong> tab for full details
-        </span>
-      </div>
-      {preflightIssues.length > 0 && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-          {preflightIssues.slice(0, 5).map(c => {
-            const color = c.result === 'Failed' || c.result === 'Error' ? T.danger : T.warning;
-            return (
-              <div key={c.name} style={{
-                display: 'flex', alignItems: 'flex-start', gap: 8,
-                padding: '4px 8px', borderRadius: T.radiusSm,
-                background: `${color}11`, borderLeft: `3px solid ${color}`, fontSize: 12,
-              }}>
-                <span style={{ color, fontWeight: 700, minWidth: 50 }}>{c.result}</span>
-                <span style={{ fontWeight: 600, color: T.textSubtle }}>
-                  {c.name.replace(/([a-z])([A-Z])/g, '$1 $2')}
-                </span>
-                {c.execution?.summary && (
-                  <span style={{ color: T.textMuted, flex: 1 }}>— {c.execution.summary}</span>
-                )}
-              </div>
-            );
-          })}
-          {preflightIssues.length > 5 && (
-            <div style={{ fontSize: 12, color: T.textMuted, padding: '2px 8px' }}>
-              +{preflightIssues.length - 5} more — see Diagnostics Checks tab
-            </div>
-          )}
-        </div>
-      )}
-    </div>
-  );
-};
-
 interface StepStation {
   id: string;
   label: string;
@@ -1123,11 +1031,9 @@ const PreCheckFindingsCallout: React.FC<{ findings: DiagsCheckResult[]; checkCon
 
 const UpgradePhaseStepper: React.FC<{
   snapshot: UpgradeSnapshot;
-  matchingCheck: UpgradeDiagsCheck | null;
   preflightIssues: DiagsCheckResult[];
   checkContext: CheckContext | null;
-  onRunCheckRequested?: (version: string, channel: string) => void;
-}> = ({ snapshot, matchingCheck, preflightIssues, checkContext, onRunCheckRequested }) => {
+}> = ({ snapshot, preflightIssues, checkContext }) => {
   const isFailed = snapshot.phase === 'failed';
 
   // Returns preflight issues that map to a specific stepper station.
@@ -1146,11 +1052,11 @@ const UpgradePhaseStepper: React.FC<{
     : snapshot.phase;
 
   // Auto-open the most relevant station on mount.
-  // not-started → pre-checks (most actionable when no upgrade is running)
+  // not-started → no auto-open (diagnostics banner below handles the prompt)
   // active phase → that phase's station
   // failed → the station that was active when it failed
   const [selectedStation, setSelectedStation] = React.useState<string | null>(() => {
-    if (snapshot.phase === 'not-started') return 'pre-checks';
+    if (snapshot.phase === 'not-started') return null;
     if (snapshot.phase === 'failed') return effectivePhase;
     if (STEP_PHASE_ORDER.includes(snapshot.phase) && snapshot.phase !== 'complete') {
       return snapshot.phase;
@@ -1164,22 +1070,6 @@ const UpgradePhaseStepper: React.FC<{
   const notStarted = snapshot.phase === 'not-started';
 
   const stations: StepStation[] = [
-    {
-      id:      'pre-checks',
-      label:   'Pre-checks',
-      status:  getStepStatus('pre-checks', effectivePhase, isFailed),
-      elapsed: (() => {
-        const s = matchingCheck?.status;
-        if (!s?.startedAt) return undefined;
-        const start = new Date(s.startedAt).getTime();
-        const end   = s.completedAt ? new Date(s.completedAt).getTime() : Date.now();
-        return Math.round((end - start) / 1000);
-      })(),
-      summary: !matchingCheck
-        ? 'No check run'
-        : `${matchingCheck.status?.checksPassed ?? 0} passed` +
-          (preflightIssues.length > 0 ? `, ${preflightIssues.length} issue${preflightIssues.length !== 1 ? 's' : ''}` : ''),
-    },
     {
       id:      'control-plane',
       label:   'Control Plane',
@@ -1350,22 +1240,6 @@ const UpgradePhaseStepper: React.FC<{
             background: `${color}14`,
             borderLeft: `4px solid ${color}`,
           }}>
-            {selectedStation === 'pre-checks' && (
-              <>
-                <div style={{ fontSize: 12, fontWeight: 700, color: T.textSubtle, textTransform: 'uppercase',
-                  letterSpacing: '0.07em', marginBottom: 8 }}>
-                  Preflight Diagnostics
-                </div>
-                <PreChecksStationDetail
-                  matchingCheck={matchingCheck}
-                  preflightIssues={preflightIssues}
-                  onRunCheckRequested={onRunCheckRequested}
-                  targetVersion={snapshot.targetVersion}
-                  targetChannel={snapshot.targetChannel}
-                />
-              </>
-            )}
-
             {selectedStation === 'control-plane' && (
               <>
                 <div style={{ fontSize: 12, fontWeight: 700, color: T.textSubtle, textTransform: 'uppercase',
@@ -1706,10 +1580,8 @@ export const UpgradeStatusView: React.FC<UpgradeStatusViewProps> = ({ onRunCheck
           {/* ---- Phase stepper (Phase C) ---- */}
           <UpgradePhaseStepper
             snapshot={snapshot}
-            matchingCheck={matchingCheck}
             preflightIssues={preflightIssues}
             checkContext={checkContext}
-            onRunCheckRequested={onRunCheckRequested}
           />
 
           {/* ---- Summary card ---- */}
