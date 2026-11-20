@@ -873,28 +873,31 @@ const stepStatusColor = (s: StepperStatus): string => {
   return T.textSubtle;
 };
 
-const StepIcon: React.FC<{ status: StepperStatus; size?: number }> = ({ status, size = 28 }) => {
+const StepIcon: React.FC<{ status: StepperStatus; size?: number }> = ({ status, size = 32 }) => {
   const color = stepStatusColor(status);
-  const fill  = status === 'pending' || status === 'skipped' ? 'transparent' : `${color}22`;
+  const isPending = status === 'pending' || status === 'skipped';
+  const fill = isPending ? 'transparent' : `${color}22`;
+  const strokeW = isPending ? 1.5 : 2;
   return (
-    <svg width={size} height={size} viewBox="0 0 28 28" aria-hidden="true" style={{ flexShrink: 0 }}>
-      <circle cx={14} cy={14} r={12} fill={fill} stroke={color} strokeWidth={2} />
+    <svg width={size} height={size} viewBox="0 0 32 32" aria-hidden="true" style={{ flexShrink: 0 }}>
+      <circle cx={16} cy={16} r={13} fill={fill} stroke={color} strokeWidth={strokeW}
+        strokeDasharray={isPending ? '4 2' : undefined} />
       {status === 'done' && (
-        <path d="M8 14 L12 18 L20 10" fill="none" stroke={color} strokeWidth={2.5}
+        <path d="M9 16 L13.5 20.5 L23 11" fill="none" stroke={color} strokeWidth={2.5}
           strokeLinecap="round" strokeLinejoin="round" />
       )}
       {status === 'active' && (
-        <circle cx={14} cy={14} r={5} fill={color} />
+        <circle cx={16} cy={16} r={6} fill={color} />
       )}
       {status === 'failed' && (
-        <path d="M10 10 L18 18 M18 10 L10 18" fill="none" stroke={color}
+        <path d="M11 11 L21 21 M21 11 L11 21" fill="none" stroke={color}
           strokeWidth={2.5} strokeLinecap="round" />
       )}
       {status === 'warning' && (
-        <text x="14" y="19" textAnchor="middle" fill={color} fontSize="14" fontWeight="700">!</text>
+        <text x="16" y="21" textAnchor="middle" fill={color} fontSize="15" fontWeight="700">!</text>
       )}
-      {(status === 'pending' || status === 'skipped') && (
-        <circle cx={14} cy={14} r={3} fill={color} />
+      {isPending && (
+        <circle cx={16} cy={16} r={4} fill={color} opacity={0.5} />
       )}
     </svg>
   );
@@ -909,11 +912,14 @@ const PreChecksStationDetail: React.FC<{
   targetChannel?: string;
 }> = ({ matchingCheck, preflightIssues, onRunCheckRequested, targetVersion, targetChannel }) => {
   if (!matchingCheck) {
+    const hasTarget = !!targetVersion;
     return (
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
         <div style={{ flex: 1, fontSize: 13, color: T.textSubtle }}>
-          No diagnostics check found for this upgrade target. Run a check to identify
-          potential roadblocks before or during this upgrade.
+          {hasTarget
+            ? <>No diagnostics check found for <strong>{targetVersion}</strong>. Run a check to identify potential roadblocks before or during this upgrade.</>
+            : <>No upgrade is currently scheduled. Run a diagnostics check at any time to validate cluster readiness before planning an upgrade.</>
+          }
         </div>
         {onRunCheckRequested && targetVersion && (
           <Button
@@ -921,7 +927,7 @@ const PreChecksStationDetail: React.FC<{
             onClick={() => onRunCheckRequested(targetVersion, targetChannel ?? '')}
             style={{ borderRadius: T.radiusMd, whiteSpace: 'nowrap' }}
           >
-            Run Preflight Check
+            Run Check for {targetVersion}
           </Button>
         )}
       </div>
@@ -1015,12 +1021,14 @@ const UpgradePhaseStepper: React.FC<{
       : 'control-plane')
     : snapshot.phase;
 
-  // Auto-open the currently active (or failed) station on mount.
+  // Auto-open the most relevant station on mount.
+  // not-started → pre-checks (most actionable when no upgrade is running)
+  // active phase → that phase's station
+  // failed → the station that was active when it failed
   const [selectedStation, setSelectedStation] = React.useState<string | null>(() => {
+    if (snapshot.phase === 'not-started') return 'pre-checks';
     if (snapshot.phase === 'failed') return effectivePhase;
-    if (STEP_PHASE_ORDER.includes(snapshot.phase)
-        && snapshot.phase !== 'not-started'
-        && snapshot.phase !== 'complete') {
+    if (STEP_PHASE_ORDER.includes(snapshot.phase) && snapshot.phase !== 'complete') {
       return snapshot.phase;
     }
     return null;
@@ -1029,6 +1037,7 @@ const UpgradePhaseStepper: React.FC<{
   // Worker aggregate counts
   const totalWorkerNodes   = (snapshot.machinePools ?? []).reduce((a, p) => a + p.total, 0);
   const updatedWorkerNodes = (snapshot.machinePools ?? []).reduce((a, p) => a + p.updated, 0);
+  const notStarted = snapshot.phase === 'not-started';
 
   const stations: StepStation[] = [
     {
@@ -1043,7 +1052,7 @@ const UpgradePhaseStepper: React.FC<{
         return Math.round((end - start) / 1000);
       })(),
       summary: !matchingCheck
-        ? 'Not run'
+        ? 'No check run'
         : `${matchingCheck.status?.checksPassed ?? 0} passed` +
           (preflightIssues.length > 0 ? `, ${preflightIssues.length} issue${preflightIssues.length !== 1 ? 's' : ''}` : ''),
     },
@@ -1052,15 +1061,20 @@ const UpgradePhaseStepper: React.FC<{
       label:   'Control Plane',
       status:  getStepStatus('control-plane', effectivePhase, isFailed),
       elapsed: snapshot.controlPlane?.elapsedSeconds,
-      summary: snapshot.controlPlane?.phase ? phaseLabel(snapshot.controlPlane.phase) : '—',
+      // In not-started state avoid showing "Not Started" — that's noise.
+      summary: notStarted ? '—' : (snapshot.controlPlane?.phase ? phaseLabel(snapshot.controlPlane.phase) : '—'),
     },
     {
       id:      'operators',
       label:   'Operators',
       status:  getStepStatus('operators', effectivePhase, isFailed),
       elapsed: snapshot.clusterOperators?.elapsedSeconds,
+      // "available" describes current health; "updated" implies upgrade completion — use the
+      // right word based on context so the stepper doesn't look like an upgrade already ran.
       summary: snapshot.clusterOperators
-        ? `${snapshot.clusterOperators.available}/${snapshot.clusterOperators.total} available`
+        ? notStarted
+          ? `${snapshot.clusterOperators.available} available`
+          : `${snapshot.clusterOperators.available}/${snapshot.clusterOperators.total} upgraded`
         : '—',
     },
     {
@@ -1070,7 +1084,11 @@ const UpgradePhaseStepper: React.FC<{
       elapsed: (snapshot.machinePools ?? []).reduce<number | undefined>(
         (max, p) => p.elapsedSeconds !== undefined ? Math.max(max ?? 0, p.elapsedSeconds) : max, undefined
       ),
-      summary: totalWorkerNodes > 0 ? `${updatedWorkerNodes}/${totalWorkerNodes} updated` : '—',
+      summary: totalWorkerNodes > 0
+        ? notStarted
+          ? `${totalWorkerNodes} node${totalWorkerNodes !== 1 ? 's' : ''}`
+          : `${updatedWorkerNodes}/${totalWorkerNodes} updated`
+        : '—',
     },
     {
       id:      'complete',
@@ -1095,9 +1113,14 @@ const UpgradePhaseStepper: React.FC<{
     }}>
       <SectionHeader
         title="Upgrade Progress"
-        badge={<PhaseBadge phase={snapshot.phase} size="sm" />}
-        meta={snapshot.elapsedSeconds && snapshot.elapsedSeconds > 0
-          ? `${fmtElapsed(snapshot.elapsedSeconds)} elapsed` : undefined}
+        badge={snapshot.phase !== 'not-started' ? <PhaseBadge phase={snapshot.phase} size="sm" /> : undefined}
+        meta={
+          snapshot.phase === 'not-started'
+            ? 'No upgrade in progress'
+            : snapshot.elapsedSeconds && snapshot.elapsedSeconds > 0
+            ? `${fmtElapsed(snapshot.elapsedSeconds)} elapsed`
+            : undefined
+        }
       />
 
       {/* Station row */}
@@ -1463,10 +1486,10 @@ export const UpgradeStatusView: React.FC<UpgradeStatusViewProps> = ({ onRunCheck
           <div style={cardStyle}>
             <SectionHeader
               title="Cluster Upgrade"
-              badge={<PhaseBadge phase={snapshot.phase} size="md" />}
+              badge={snapshot.phase !== 'not-started' ? <PhaseBadge phase={snapshot.phase} size="md" /> : undefined}
             />
             <div style={{ padding: '14px 16px', display: 'flex', gap: 24, flexWrap: 'wrap', alignItems: 'flex-start' }}>
-              {/* Version */}
+              {/* Current version */}
               <div>
                 <div style={{ fontSize: 11, color: T.textSubtle, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 4 }}>
                   Current Version
@@ -1475,27 +1498,34 @@ export const UpgradeStatusView: React.FC<UpgradeStatusViewProps> = ({ onRunCheck
                   {snapshot.currentVersion ?? '—'}
                 </div>
               </div>
-              {snapshot.targetVersion && snapshot.targetVersion !== snapshot.currentVersion && (
-                <>
-                  <div style={{ alignSelf: 'center', color: T.textSubtle, fontSize: 20 }}>→</div>
-                  <div>
-                    <div style={{ fontSize: 11, color: T.textSubtle, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 4 }}>
-                      Target Version
-                    </div>
-                    <div style={{ fontSize: 20, fontWeight: 700, fontFamily: 'monospace', color: T.info }}>
-                      {snapshot.targetVersion}
-                    </div>
-                  </div>
-                </>
-              )}
-              {snapshot.elapsedSeconds !== undefined && snapshot.elapsedSeconds > 0 && (
+
+              {/* Active upgrade: show target + elapsed */}
+              {snapshot.targetVersion && snapshot.targetVersion !== snapshot.currentVersion && (<>
+                <div style={{ alignSelf: 'center', color: T.textSubtle, fontSize: 20 }}>→</div>
                 <div>
                   <div style={{ fontSize: 11, color: T.textSubtle, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 4 }}>
-                    Elapsed
+                    Target Version
                   </div>
-                  <div style={{ fontSize: 18, fontWeight: 600 }}>
-                    {fmtElapsed(snapshot.elapsedSeconds)}
+                  <div style={{ fontSize: 20, fontWeight: 700, fontFamily: 'monospace', color: T.info }}>
+                    {snapshot.targetVersion}
                   </div>
+                </div>
+                {snapshot.elapsedSeconds !== undefined && snapshot.elapsedSeconds > 0 && (
+                  <div>
+                    <div style={{ fontSize: 11, color: T.textSubtle, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 4 }}>
+                      Elapsed
+                    </div>
+                    <div style={{ fontSize: 18, fontWeight: 600 }}>
+                      {fmtElapsed(snapshot.elapsedSeconds)}
+                    </div>
+                  </div>
+                )}
+              </>)}
+
+              {/* Not-started: explain state so the card isn't just an empty version block */}
+              {snapshot.phase === 'not-started' && (
+                <div style={{ alignSelf: 'center', fontSize: 13, color: T.textMuted, fontStyle: 'italic' }}>
+                  Cluster is at the current version — no upgrade scheduled.
                 </div>
               )}
             </div>
@@ -1503,8 +1533,7 @@ export const UpgradeStatusView: React.FC<UpgradeStatusViewProps> = ({ onRunCheck
               <div style={{
                 padding: '8px 16px',
                 borderTop: `1px solid ${T.border}`,
-                fontSize: 12, color: T.textSubtle,
-                fontStyle: 'italic',
+                fontSize: 12, color: T.textSubtle, fontStyle: 'italic',
               }}>
                 {snapshot.cvoMessage}
               </div>
