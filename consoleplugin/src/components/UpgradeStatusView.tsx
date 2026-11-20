@@ -873,31 +873,37 @@ const stepStatusColor = (s: StepperStatus): string => {
   return T.textSubtle;
 };
 
-const StepIcon: React.FC<{ status: StepperStatus; size?: number }> = ({ status, size = 32 }) => {
+// Traffic-light style icon: solid filled circle for active/done/failed, dashed outline for pending.
+const StepIcon: React.FC<{ status: StepperStatus }> = ({ status }) => {
   const color = stepStatusColor(status);
   const isPending = status === 'pending' || status === 'skipped';
-  const fill = isPending ? 'transparent' : `${color}22`;
-  const strokeW = isPending ? 1.5 : 2;
+  const size = 40;
   return (
-    <svg width={size} height={size} viewBox="0 0 32 32" aria-hidden="true" style={{ flexShrink: 0 }}>
-      <circle cx={16} cy={16} r={13} fill={fill} stroke={color} strokeWidth={strokeW}
-        strokeDasharray={isPending ? '4 2' : undefined} />
+    <svg width={size} height={size} viewBox="0 0 40 40" aria-hidden="true" style={{ flexShrink: 0 }}>
+      {/* Background fill */}
+      <circle cx={20} cy={20} r={17}
+        fill={isPending ? 'transparent' : color}
+        stroke={color} strokeWidth={isPending ? 2.5 : 0}
+        strokeDasharray={isPending ? '5 3' : undefined}
+        opacity={isPending ? 0.7 : 1}
+      />
+      {/* Center dot for pending */}
+      {isPending && <circle cx={20} cy={20} r={5} fill={color} opacity={0.45} />}
+      {/* Checkmark for done */}
       {status === 'done' && (
-        <path d="M9 16 L13.5 20.5 L23 11" fill="none" stroke={color} strokeWidth={2.5}
+        <path d="M11 20 L17 26.5 L29 13.5" fill="none" stroke="white" strokeWidth={3.5}
           strokeLinecap="round" strokeLinejoin="round" />
       )}
-      {status === 'active' && (
-        <circle cx={16} cy={16} r={6} fill={color} />
-      )}
+      {/* Dot for active */}
+      {status === 'active' && <circle cx={20} cy={20} r={8} fill="white" opacity={0.9} />}
+      {/* X for failed */}
       {status === 'failed' && (
-        <path d="M11 11 L21 21 M21 11 L11 21" fill="none" stroke={color}
-          strokeWidth={2.5} strokeLinecap="round" />
+        <path d="M13 13 L27 27 M27 13 L13 27" fill="none" stroke="white"
+          strokeWidth={3.5} strokeLinecap="round" />
       )}
+      {/* ! for warning */}
       {status === 'warning' && (
-        <text x="16" y="21" textAnchor="middle" fill={color} fontSize="15" fontWeight="700">!</text>
-      )}
-      {isPending && (
-        <circle cx={16} cy={16} r={4} fill={color} opacity={0.5} />
+        <text x="20" y="27" textAnchor="middle" fill="white" fontSize="19" fontWeight="700">!</text>
       )}
     </svg>
   );
@@ -1102,6 +1108,8 @@ const UpgradePhaseStepper: React.FC<{
   const toggleStation = (id: string) =>
     setSelectedStation(prev => prev === id ? null : id);
 
+  const [hoveredStation, setHoveredStation] = React.useState<string | null>(null);
+
   return (
 
     <div style={{
@@ -1124,65 +1132,86 @@ const UpgradePhaseStepper: React.FC<{
       />
 
       {/* Station row */}
-      <div style={{ padding: '20px 16px 16px', display: 'flex', alignItems: 'flex-start' }}>
+      <div style={{ padding: '16px 12px 12px', display: 'flex', alignItems: 'flex-start', gap: 2 }}>
         {stations.map((station, idx) => {
           const isSelected = selectedStation === station.id;
+          const isHovered = hoveredStation === station.id;
           const color = stepStatusColor(station.status);
-          // Connector is green once the left station is done
+          // Connector turns green once the station on the left is complete.
           const connectorColor = station.status === 'done' ? T.success : T.border;
 
           return (
             <React.Fragment key={station.id}>
+              {/* Station card */}
               <div
                 onClick={() => toggleStation(station.id)}
+                onMouseEnter={() => setHoveredStation(station.id)}
+                onMouseLeave={() => setHoveredStation(null)}
                 role="button"
                 aria-expanded={isSelected}
                 aria-label={`${station.label}: ${station.status}`}
                 style={{
                   display: 'flex', flexDirection: 'column', alignItems: 'center',
-                  flex: 1, minWidth: 72, cursor: 'pointer',
-                  padding: '6px 4px 8px',
+                  flex: 1, minWidth: 80, cursor: 'pointer',
+                  padding: '10px 6px 8px',
                   borderRadius: T.radiusMd,
-                  background: isSelected ? `${color}11` : 'transparent',
-                  border: isSelected ? `1px solid ${color}44` : '1px solid transparent',
-                  transition: 'background 0.15s, border-color 0.15s',
+                  // Card-style background — slightly raised, more visible hover/selected states
+                  background: isSelected
+                    ? `${color}20`
+                    : isHovered
+                    ? `${color}0f`
+                    : 'var(--pf-t--global--background--color--secondary--default, rgba(0,0,0,0.05))',
+                  border: `1px solid ${isSelected ? color : isHovered ? `${color}88` : T.border}`,
+                  boxShadow: isSelected
+                    ? `0 0 0 2px ${color}44, 0 2px 6px ${color}22`
+                    : isHovered
+                    ? `0 2px 8px ${color}30`
+                    : '0 1px 3px rgba(0,0,0,0.12)',
+                  transition: 'background 0.15s, border-color 0.15s, box-shadow 0.15s',
                   userSelect: 'none',
                 }}
               >
-                <StepIcon status={station.status} size={28} />
+                <StepIcon status={station.status} />
                 <div style={{
-                  marginTop: 6, fontSize: 11, fontWeight: 700, textAlign: 'center',
+                  marginTop: 7, fontSize: 11, fontWeight: 700, textAlign: 'center',
                   textTransform: 'uppercase', letterSpacing: '0.05em', color,
                 }}>
                   {station.label}
                 </div>
                 {station.elapsed !== undefined && station.elapsed > 0 && (
-                  <div style={{ fontSize: 11, color: T.textMuted, marginTop: 1 }}>
+                  <div style={{ fontSize: 11, color: T.textMuted, marginTop: 2 }}>
                     {fmtElapsed(station.elapsed)}
                   </div>
                 )}
                 {station.summary && (
                   <div style={{
                     fontSize: 10, color: T.textSubtle, marginTop: 2,
-                    textAlign: 'center', lineHeight: 1.3, maxWidth: 100,
+                    textAlign: 'center', lineHeight: 1.3, maxWidth: 110,
                   }}>
                     {station.summary}
                   </div>
                 )}
+                {/* Expand/collapse indicator */}
+                <div style={{
+                  marginTop: 5, fontSize: 10, color: isSelected ? color : T.textMuted,
+                  fontWeight: isSelected ? 700 : 400,
+                }}>
+                  {isSelected ? '▲' : '▼'}
+                </div>
               </div>
 
+              {/* Connector: line + SVG chevron arrow */}
               {idx < stations.length - 1 && (
                 <div style={{
-                  flexShrink: 0, width: 24, alignSelf: 'flex-start', marginTop: 20,
-                  display: 'flex', alignItems: 'center',
+                  flexShrink: 0, display: 'flex', alignItems: 'center',
+                  alignSelf: 'flex-start', marginTop: 20, width: 28,
                 }}>
                   <div style={{ flex: 1, height: 2, background: connectorColor }} />
-                  <div style={{
-                    width: 0, height: 0,
-                    borderTop: '4px solid transparent',
-                    borderBottom: '4px solid transparent',
-                    borderLeft: `5px solid ${connectorColor}`,
-                  }} />
+                  <svg width={10} height={14} viewBox="0 0 10 14" style={{ flexShrink: 0, marginLeft: -1 }}
+                    aria-hidden="true">
+                    <path d="M1 1 L9 7 L1 13" fill="none" stroke={connectorColor}
+                      strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
                 </div>
               )}
             </React.Fragment>
@@ -1199,8 +1228,8 @@ const UpgradePhaseStepper: React.FC<{
         return (
           <div style={{
             borderTop: `1px solid ${T.border}`,
-            padding: '12px 20px 14px',
-            background: `${color}08`,
+            padding: '14px 20px 16px',
+            background: `${color}14`,
             borderLeft: `4px solid ${color}`,
           }}>
             {selectedStation === 'pre-checks' && (
