@@ -1521,7 +1521,7 @@ export const UpgradeStatusView: React.FC<UpgradeStatusViewProps> = ({ onRunCheck
   const [lastRefresh, setLastRefresh] = React.useState<Date | null>(null);
   const [refreshing, setRefreshing] = React.useState(false);
   const [history, setHistory]       = React.useState<UpgradeHistoryResponse | null>(null);
-  const [muoVersion, setMuoVersion] = React.useState<{ version: string; gitCommit: string } | null>(null);
+  const [muoVersion, setMuoVersion] = React.useState<{ version: string; gitCommit: string; image?: string } | null>(null);
 
   // Watch UpgradeDiagsCheck CRs to surface preflight results for the current upgrade target.
   const [diagsChecks] = useK8sWatchResource<UpgradeDiagsCheck[]>({
@@ -1619,7 +1619,7 @@ export const UpgradeStatusView: React.FC<UpgradeStatusViewProps> = ({ onRunCheck
     try {
       const resp = await consoleFetch(VERSION_API);
       if (!resp.ok) return;
-      const data: { version: string; gitCommit: string } = await resp.json();
+      const data: { version: string; gitCommit: string; image?: string } = await resp.json();
       setMuoVersion(data);
     } catch {
       // version is best-effort
@@ -1675,16 +1675,24 @@ export const UpgradeStatusView: React.FC<UpgradeStatusViewProps> = ({ onRunCheck
             Last refreshed {lastRefresh.toLocaleTimeString()}
           </span>
         )}
-        {muoVersion && (
-          <span style={{
-            marginLeft: 'auto', fontSize: 11, color: T.textMuted,
-            fontFamily: 'monospace', letterSpacing: '0.03em',
-          }}
-            title={`MUO version ${muoVersion.version} · commit ${muoVersion.gitCommit}`}
-          >
-            MUO {muoVersion.gitCommit === 'unknown' ? muoVersion.version : muoVersion.gitCommit.slice(0, 7)}
-          </span>
-        )}
+        {muoVersion && (() => {
+          // Prefer image tag (most reliable in production), then gitCommit, then version
+          const imageTag = muoVersion.image?.split(':').pop();
+          const label = imageTag ?? (muoVersion.gitCommit !== 'unknown' ? muoVersion.gitCommit.slice(0, 7) : muoVersion.version);
+          const tooltip = [
+            `MUO ${muoVersion.version}`,
+            muoVersion.gitCommit !== 'unknown' ? `commit ${muoVersion.gitCommit}` : null,
+            muoVersion.image ? `image ${muoVersion.image}` : null,
+          ].filter(Boolean).join(' · ');
+          return (
+            <span style={{
+              marginLeft: 'auto', fontSize: 11, color: T.textMuted,
+              fontFamily: 'monospace', letterSpacing: '0.03em', cursor: 'default',
+            }} title={tooltip}>
+              MUO {label}
+            </span>
+          );
+        })()}
       </div>
 
       {error && (

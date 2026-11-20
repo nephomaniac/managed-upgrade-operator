@@ -16,6 +16,7 @@ import (
 	"github.com/openshift/managed-upgrade-operator/version"
 	authnv1 "k8s.io/api/authentication/v1"
 	authzv1 "k8s.io/api/authorization/v1"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -707,13 +708,47 @@ func (s *UpgradeDiagsHTTPServer) routeVersion(w http.ResponseWriter, r *http.Req
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+
+	// Prefer reading version info from the running pod (always accurate in production)
+	// then fall back to env var or the ldflags-embedded default.
+	image := s.selfImage(r.Context())
+	gitCommit := version.GitCommit
+	if gc := os.Getenv("GIT_COMMIT"); gc != "" {
+		gitCommit = gc
+	}
+
 	resp := struct {
 		Version   string `json:"version"`
 		GitCommit string `json:"gitCommit"`
+		Image     string `json:"image,omitempty"`
 	}{
 		Version:   version.Version,
-		GitCommit: version.GitCommit,
+		GitCommit: gitCommit,
+		Image:     image,
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(resp)
+}
+
+// selfImage returns the container image of the running operator pod by querying
+// the kube API for the pod identified by POD_NAME / s.Namespace.
+// Returns an empty string if the lookup fails (non-fatal).
+func (s *UpgradeDiagsHTTPServer) selfImage(ctx context.Context) string {
+	podName := os.Getenv("POD_NAME")
+	if podName == "" || s.Namespace == "" {
+		return ""
+	}
+	pod := &corev1.Pod{}
+	if err := s.Client.Get(ctx, types.NamespacedName{Name: podName, Namespace: s.Namespace}, pod); err != nil {
+		return ""
+	}
+	for _, c := range pod.Spec.Containers {
+		if c.Name == "managed-upgrade-operator" {
+			return c.Image
+		}
+	}
+	if len(pod.Spec.Containers) > 0 {
+		return pod.Spec.Containers[0].Image
+	}
+	return ""
 }
