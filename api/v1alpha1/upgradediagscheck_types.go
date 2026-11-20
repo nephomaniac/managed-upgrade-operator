@@ -202,6 +202,13 @@ type DiagsCheckResult struct {
 	// Execution contains runtime information about how the check ran.
 	Execution CheckExecution `json:"execution"`
 
+	// UpgradePhase identifies which upgrade phase this check most directly validates.
+	// Valid values: "pre-checks", "control-plane", "operators", "worker-upgrade".
+	// UIs use this to correlate findings with the upgrade phase where they manifest,
+	// so new checks are automatically mapped without requiring any UI changes.
+	// +kubebuilder:validation:Optional
+	UpgradePhase string `json:"upgradePhase,omitempty"`
+
 	// StructuredFindings provides rich, machine-readable finding details.
 	// When present, UIs should prefer this over parsing string Findings.
 	// +kubebuilder:validation:Optional

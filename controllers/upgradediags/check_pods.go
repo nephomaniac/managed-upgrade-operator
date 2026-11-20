@@ -25,6 +25,7 @@ func (c *stuckTerminatingPodsCheck) DefaultTimeout() time.Duration { return 60 *
 func (c *stuckTerminatingPodsCheck) DefaultOwner() upgradev1alpha1.CheckOwner {
 	return upgradev1alpha1.OwnerCustomer
 }
+func (c *stuckTerminatingPodsCheck) UpgradePhase() string { return "worker-upgrade" }
 
 func (c *stuckTerminatingPodsCheck) Run(ctx context.Context, deps CheckDependencies, logger logr.Logger, timeout time.Duration) CheckOutput {
 	pods := &corev1.PodList{}

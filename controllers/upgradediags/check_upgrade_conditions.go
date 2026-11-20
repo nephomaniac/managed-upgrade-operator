@@ -29,6 +29,7 @@ func (c *upgradeableConditionCheck) DefaultTimeout() time.Duration { return 0 }
 func (c *upgradeableConditionCheck) DefaultOwner() upgradev1alpha1.CheckOwner {
 	return upgradev1alpha1.OwnerCustomer
 }
+func (c *upgradeableConditionCheck) UpgradePhase() string { return "control-plane" }
 
 func (c *upgradeableConditionCheck) Run(ctx context.Context, deps CheckDependencies, logger logr.Logger, timeout time.Duration) CheckOutput {
 	cvClient := deps.CvClientBuilder.New(deps.Client)
@@ -69,6 +70,7 @@ func (c *pullSecretCheck) DefaultTimeout() time.Duration { return 0 }
 func (c *pullSecretCheck) DefaultOwner() upgradev1alpha1.CheckOwner {
 	return upgradev1alpha1.OwnerCustomer
 }
+func (c *pullSecretCheck) UpgradePhase() string { return "control-plane" }
 
 func (c *pullSecretCheck) Run(ctx context.Context, deps CheckDependencies, logger logr.Logger, timeout time.Duration) CheckOutput {
 	_, err := util.GetAccessToken(deps.Client)
@@ -95,6 +97,7 @@ func (c *adminAcksCheck) DefaultTimeout() time.Duration { return 0 }
 func (c *adminAcksCheck) DefaultOwner() upgradev1alpha1.CheckOwner {
 	return upgradev1alpha1.OwnerCustomer
 }
+func (c *adminAcksCheck) UpgradePhase() string { return "control-plane" }
 
 func (c *adminAcksCheck) Run(ctx context.Context, deps CheckDependencies, logger logr.Logger, timeout time.Duration) CheckOutput {
 	// Determine upgrade type by comparing current vs desired minor version.

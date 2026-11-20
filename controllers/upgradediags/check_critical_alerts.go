@@ -31,6 +31,7 @@ func (c *criticalAlertsCheck) DefaultTimeout() time.Duration { return 0 }
 func (c *criticalAlertsCheck) DefaultOwner() upgradev1alpha1.CheckOwner {
 	return upgradev1alpha1.OwnerCustomer
 }
+func (c *criticalAlertsCheck) UpgradePhase() string { return "pre-checks" }
 
 func (c *criticalAlertsCheck) Run(ctx context.Context, deps CheckDependencies, logger logr.Logger, timeout time.Duration) CheckOutput {
 	metricsClient, err := deps.MetricsClientBuilder.NewClient(deps.Client)
@@ -72,6 +73,7 @@ func (c *criticalAlertsExtendedCheck) DefaultTimeout() time.Duration { return 0 
 func (c *criticalAlertsExtendedCheck) DefaultOwner() upgradev1alpha1.CheckOwner {
 	return upgradev1alpha1.OwnerCustomer
 }
+func (c *criticalAlertsExtendedCheck) UpgradePhase() string { return "pre-checks" }
 
 func (c *criticalAlertsExtendedCheck) Run(ctx context.Context, deps CheckDependencies, logger logr.Logger, timeout time.Duration) CheckOutput {
 	// QueryAlerts calls /api/v1/alerts (not PromQL) so we get alert annotations

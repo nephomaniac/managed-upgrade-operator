@@ -890,41 +890,9 @@ type StepperStatus = 'done' | 'active' | 'pending' | 'failed' | 'warning' | 'ski
 // Phase order for upgrade progress. 'failed' is not in the sequence (handled separately).
 const STEP_PHASE_ORDER = ['not-started', 'pre-checks', 'control-plane', 'operators', 'worker-upgrade', 'complete'];
 
-// Maps each diagnostics check name to the upgrade phase it most directly validates.
-// Used to surface relevant pre-check findings inside each stepper station detail panel.
-const PHASE_CHECK_MAP: Record<string, string> = {
-  // Control plane readiness — these checks determine whether the upgrade can begin at all.
-  UpgradeTarget:                           'control-plane',
-  UpgradeTargetExtended:                   'control-plane',
-  UpgradeInFlight:                         'control-plane',
-  UpgradeableCondition:                    'control-plane',
-  UpgradeConfigConsistency:                'control-plane',
-  ClusterVersion:                          'control-plane',
-  AdminAcks:                               'control-plane',
-  PullSecretValid:                         'control-plane',
-  // Cluster operator health — directly maps to the Operators upgrade phase.
-  ClusterOperators:                        'operators',
-  ClusterOperatorsExtended:                'operators',
-  InstalledOperatorMaxVersion:             'operators',
-  ConsolePluginReferences:                 'operators',
-  // Worker node and drain safety — these affect the worker-upgrade phase.
-  PodDisruptionBudgets:                    'worker-upgrade',
-  PodDisruptionBudgetsDrainSafety:         'worker-upgrade',
-  PodDisruptionBudgetsMasterInfraExtended: 'worker-upgrade',
-  StuckDrainingNodes:                      'worker-upgrade',
-  StuckTerminatingPods:                    'worker-upgrade',
-  ManuallyCordonedNodes:                   'worker-upgrade',
-  ManuallyCordonedNodesExtended:           'worker-upgrade',
-  NodeUnschedulableTaints:                 'worker-upgrade',
-  NodeUnschedulableTaintsExtended:         'worker-upgrade',
-  WorkerNodeReadiness:                     'worker-upgrade',
-  PausedMachineConfigPool:                 'worker-upgrade',
-  PendingCSRs:                             'worker-upgrade',
-  ClusterAutoscalerConfig:                 'worker-upgrade',
-  // Cross-cutting — shown in the pre-checks station.
-  CriticalAlerts:                          'pre-checks',
-  CriticalAlertsExtended:                  'pre-checks',
-};
+// Phase mapping is now carried by the backend: each check's UpgradePhase() method
+// sets DiagsCheckResult.upgradePhase. The frontend reads c.upgradePhase directly —
+// no hardcoded map needed. New checks are automatically correlated.
 
 // Context type describing how relevant a preflight check snapshot is relative to the current
 // upgrade state. Used to drive banner wording and re-run suggestions.
@@ -1162,8 +1130,10 @@ const UpgradePhaseStepper: React.FC<{
   const isFailed = snapshot.phase === 'failed';
 
   // Returns preflight issues that map to a specific stepper station.
+  // The backend populates c.upgradePhase from each check's UpgradePhase() method,
+  // so new checks are automatically correlated without any frontend changes.
   const findingsForStation = (stationId: string) =>
-    preflightIssues.filter(c => PHASE_CHECK_MAP[c.name] === stationId);
+    preflightIssues.filter(c => c.upgradePhase === stationId);
 
   // Determine the "effective current phase" for getStepStatus when phase=failed.
   // We approximate: use the last phase that would have been active before failure.

@@ -25,6 +25,7 @@ func (c *clusterOperatorsCheck) DefaultTimeout() time.Duration { return 0 }
 func (c *clusterOperatorsCheck) DefaultOwner() upgradev1alpha1.CheckOwner {
 	return upgradev1alpha1.OwnerCustomer
 }
+func (c *clusterOperatorsCheck) UpgradePhase() string { return "operators" }
 
 func (c *clusterOperatorsCheck) Run(ctx context.Context, deps CheckDependencies, logger logr.Logger, timeout time.Duration) CheckOutput {
 	metricsClient, err := deps.MetricsClientBuilder.NewClient(deps.Client)
@@ -66,6 +67,7 @@ func (c *clusterOperatorsExtendedCheck) DefaultTimeout() time.Duration { return 
 func (c *clusterOperatorsExtendedCheck) DefaultOwner() upgradev1alpha1.CheckOwner {
 	return upgradev1alpha1.OwnerCustomer
 }
+func (c *clusterOperatorsExtendedCheck) UpgradePhase() string { return "operators" }
 
 func (c *clusterOperatorsExtendedCheck) Run(ctx context.Context, deps CheckDependencies, logger logr.Logger, timeout time.Duration) CheckOutput {
 	var findings []string

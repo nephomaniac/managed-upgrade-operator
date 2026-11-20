@@ -58,7 +58,7 @@ type CheckOutput struct {
 //  2. Register it in checks.go by appending to registeredChecks.
 //
 // The framework handles: timeout context, panic recovery, timing, Description,
-// and DefaultOwner. Your Run() only needs to return a CheckOutput.
+// DefaultOwner, and UpgradePhase injection. Your Run() only needs to return a CheckOutput.
 type DiagnosticsCheck interface {
 	// Name returns the unique check identifier used in CR status and the allowlist.
 	Name() string
@@ -67,6 +67,11 @@ type DiagnosticsCheck interface {
 	// DefaultOwner returns who is responsible when this check fails or errors
 	// and Run() does not set CheckOutput.Owner.
 	DefaultOwner() upgradev1alpha1.CheckOwner
+	// UpgradePhase returns the upgrade phase this check most directly validates.
+	// Valid values: "pre-checks", "control-plane", "operators", "worker-upgrade".
+	// The framework injects this into every DiagsCheckResult so UIs can correlate
+	// findings with the phase where they manifest — without any hardcoded mapping.
+	UpgradePhase() string
 	// DefaultTimeout returns the preferred per-check timeout. Return 0 to inherit
 	// the spec.defaultCheckTimeoutSeconds value (or the global 30s fallback).
 	// Override this for checks that are known to be slow (e.g. PDB node scans).

@@ -28,6 +28,7 @@ func (c *consolePluginReferencesCheck) DefaultTimeout() time.Duration { return 3
 func (c *consolePluginReferencesCheck) DefaultOwner() upgradev1alpha1.CheckOwner {
 	return upgradev1alpha1.OwnerCustomer
 }
+func (c *consolePluginReferencesCheck) UpgradePhase() string { return "operators" }
 
 func (c *consolePluginReferencesCheck) Run(ctx context.Context, deps CheckDependencies, logger logr.Logger, timeout time.Duration) CheckOutput {
 	pluginList := &unstructured.UnstructuredList{}

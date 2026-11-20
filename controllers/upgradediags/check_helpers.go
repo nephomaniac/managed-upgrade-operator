@@ -80,28 +80,28 @@ func runCheck(check DiagnosticsCheck, ctx context.Context, deps CheckDependencie
 			}
 		}
 	}
-	return withTiming(r, start, metav1.Now())
+	return withPhase(withTiming(r, start, metav1.Now()), check.UpgradePhase())
 }
 
 func timedOutResult(check DiagnosticsCheck, timeout time.Duration) upgradev1alpha1.DiagsCheckResult {
-	return withDesc(upgradev1alpha1.DiagsCheckResult{
+	return withPhase(withDesc(upgradev1alpha1.DiagsCheckResult{
 		Name:           check.Name(),
 		Result:         upgradev1alpha1.CheckResultTimedOut,
 		Owner:          upgradev1alpha1.OwnerServiceTeam,
 		Action:         "Increase spec.overallTimeoutSeconds or reduce the number of checks.",
 		TimeoutSeconds: int32(timeout.Seconds()),
 		Execution:      upgradev1alpha1.CheckExecution{State: upgradev1alpha1.CheckTimedOut},
-	}, check.Description())
+	}, check.Description()), check.UpgradePhase())
 }
 
 func skippedResult(check DiagnosticsCheck, timeout time.Duration) upgradev1alpha1.DiagsCheckResult {
-	return withDesc(upgradev1alpha1.DiagsCheckResult{
+	return withPhase(withDesc(upgradev1alpha1.DiagsCheckResult{
 		Name:           check.Name(),
 		Result:         upgradev1alpha1.CheckResultSkipped,
 		Owner:          check.DefaultOwner(),
 		TimeoutSeconds: int32(timeout.Seconds()),
 		Execution:      upgradev1alpha1.CheckExecution{State: upgradev1alpha1.CheckSkipped},
-	}, check.Description())
+	}, check.Description()), check.UpgradePhase())
 }
 
 func completedResult(name string, result upgradev1alpha1.CheckResult, summary string, findings []string, timeout time.Duration) upgradev1alpha1.DiagsCheckResult {
@@ -156,6 +156,11 @@ func withOwner(r upgradev1alpha1.DiagsCheckResult, owner upgradev1alpha1.CheckOw
 
 func withAction(r upgradev1alpha1.DiagsCheckResult, action string) upgradev1alpha1.DiagsCheckResult {
 	r.Action = action
+	return r
+}
+
+func withPhase(r upgradev1alpha1.DiagsCheckResult, phase string) upgradev1alpha1.DiagsCheckResult {
+	r.UpgradePhase = phase
 	return r
 }
 

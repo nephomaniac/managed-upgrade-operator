@@ -30,6 +30,7 @@ func (c *upgradeConfigConsistencyCheck) DefaultTimeout() time.Duration { return 
 func (c *upgradeConfigConsistencyCheck) DefaultOwner() upgradev1alpha1.CheckOwner {
 	return upgradev1alpha1.OwnerServiceTeam
 }
+func (c *upgradeConfigConsistencyCheck) UpgradePhase() string { return "control-plane" }
 
 func (c *upgradeConfigConsistencyCheck) Run(ctx context.Context, deps CheckDependencies, logger logr.Logger, timeout time.Duration) CheckOutput {
 	uc := &upgradev1alpha1.UpgradeConfig{}

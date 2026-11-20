@@ -37,6 +37,7 @@ func (c *upgradeTargetCheck) DefaultTimeout() time.Duration { return 0 }
 func (c *upgradeTargetCheck) DefaultOwner() upgradev1alpha1.CheckOwner {
 	return upgradev1alpha1.OwnerCustomer
 }
+func (c *upgradeTargetCheck) UpgradePhase() string { return "control-plane" }
 
 func (c *upgradeTargetCheck) Run(ctx context.Context, deps CheckDependencies, logger logr.Logger, timeout time.Duration) CheckOutput {
 	cvClient := deps.CvClientBuilder.New(deps.Client)
@@ -104,6 +105,7 @@ func (c *upgradeTargetExtendedCheck) DefaultTimeout() time.Duration { return 60 
 func (c *upgradeTargetExtendedCheck) DefaultOwner() upgradev1alpha1.CheckOwner {
 	return upgradev1alpha1.OwnerCustomer
 }
+func (c *upgradeTargetExtendedCheck) UpgradePhase() string { return "control-plane" }
 
 func (c *upgradeTargetExtendedCheck) Run(ctx context.Context, deps CheckDependencies, logger logr.Logger, timeout time.Duration) CheckOutput {
 	cvClient := deps.CvClientBuilder.New(deps.Client)

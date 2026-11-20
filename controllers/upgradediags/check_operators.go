@@ -29,6 +29,7 @@ func (c *installedOperatorMaxVersionCheck) DefaultTimeout() time.Duration { retu
 func (c *installedOperatorMaxVersionCheck) DefaultOwner() upgradev1alpha1.CheckOwner {
 	return upgradev1alpha1.OwnerCustomer
 }
+func (c *installedOperatorMaxVersionCheck) UpgradePhase() string { return "operators" }
 
 func (c *installedOperatorMaxVersionCheck) Run(ctx context.Context, deps CheckDependencies, logger logr.Logger, timeout time.Duration) CheckOutput {
 	// Parse target minor version (e.g. "4.19.3" → 4, 19)

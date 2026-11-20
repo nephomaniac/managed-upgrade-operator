@@ -28,6 +28,7 @@ func (c *stuckDrainingNodesCheck) DefaultTimeout() time.Duration { return 90 * t
 func (c *stuckDrainingNodesCheck) DefaultOwner() upgradev1alpha1.CheckOwner {
 	return upgradev1alpha1.OwnerCustomer
 }
+func (c *stuckDrainingNodesCheck) UpgradePhase() string { return "worker-upgrade" }
 
 func (c *stuckDrainingNodesCheck) Run(ctx context.Context, deps CheckDependencies, logger logr.Logger, timeout time.Duration) CheckOutput {
 	nodeList := &corev1.NodeList{}

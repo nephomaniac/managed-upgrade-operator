@@ -26,6 +26,7 @@ func (c *clusterAutoscalerConfigCheck) DefaultTimeout() time.Duration { return 0
 func (c *clusterAutoscalerConfigCheck) DefaultOwner() upgradev1alpha1.CheckOwner {
 	return upgradev1alpha1.OwnerCustomer
 }
+func (c *clusterAutoscalerConfigCheck) UpgradePhase() string { return "worker-upgrade" }
 
 func (c *clusterAutoscalerConfigCheck) Run(ctx context.Context, deps CheckDependencies, logger logr.Logger, timeout time.Duration) CheckOutput {
 	ca := &unstructured.Unstructured{}

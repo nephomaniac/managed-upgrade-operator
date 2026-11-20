@@ -27,6 +27,7 @@ func (c *manuallyCordonedNodesCheck) DefaultTimeout() time.Duration { return 0 }
 func (c *manuallyCordonedNodesCheck) DefaultOwner() upgradev1alpha1.CheckOwner {
 	return upgradev1alpha1.OwnerCustomer
 }
+func (c *manuallyCordonedNodesCheck) UpgradePhase() string { return "worker-upgrade" }
 
 func (c *manuallyCordonedNodesCheck) Run(ctx context.Context, deps CheckDependencies, logger logr.Logger, timeout time.Duration) CheckOutput {
 	metricsClient, err := deps.MetricsClientBuilder.NewClient(deps.Client)
@@ -75,6 +76,7 @@ func (c *manuallyCordonedNodesExtendedCheck) DefaultTimeout() time.Duration { re
 func (c *manuallyCordonedNodesExtendedCheck) DefaultOwner() upgradev1alpha1.CheckOwner {
 	return upgradev1alpha1.OwnerCustomer
 }
+func (c *manuallyCordonedNodesExtendedCheck) UpgradePhase() string { return "worker-upgrade" }
 
 func (c *manuallyCordonedNodesExtendedCheck) Run(ctx context.Context, deps CheckDependencies, logger logr.Logger, timeout time.Duration) CheckOutput {
 	nodes := &corev1.NodeList{}
@@ -123,6 +125,7 @@ func (c *workerNodeReadinessCheck) DefaultTimeout() time.Duration { return 0 }
 func (c *workerNodeReadinessCheck) DefaultOwner() upgradev1alpha1.CheckOwner {
 	return upgradev1alpha1.OwnerCustomer
 }
+func (c *workerNodeReadinessCheck) UpgradePhase() string { return "worker-upgrade" }
 
 func (c *workerNodeReadinessCheck) Run(ctx context.Context, deps CheckDependencies, logger logr.Logger, timeout time.Duration) CheckOutput {
 	nodes := &corev1.NodeList{}
@@ -184,6 +187,7 @@ func (c *nodeTaintsCheck) DefaultTimeout() time.Duration { return 0 }
 func (c *nodeTaintsCheck) DefaultOwner() upgradev1alpha1.CheckOwner {
 	return upgradev1alpha1.OwnerCustomer
 }
+func (c *nodeTaintsCheck) UpgradePhase() string { return "worker-upgrade" }
 
 func (c *nodeTaintsCheck) Run(ctx context.Context, deps CheckDependencies, logger logr.Logger, timeout time.Duration) CheckOutput {
 	metricsClient, err := deps.MetricsClientBuilder.NewClient(deps.Client)
@@ -232,6 +236,7 @@ func (c *nodeTaintsExtendedCheck) DefaultTimeout() time.Duration { return 0 }
 func (c *nodeTaintsExtendedCheck) DefaultOwner() upgradev1alpha1.CheckOwner {
 	return upgradev1alpha1.OwnerCustomer
 }
+func (c *nodeTaintsExtendedCheck) UpgradePhase() string { return "worker-upgrade" }
 
 func (c *nodeTaintsExtendedCheck) Run(ctx context.Context, deps CheckDependencies, logger logr.Logger, timeout time.Duration) CheckOutput {
 	nodes := &corev1.NodeList{}

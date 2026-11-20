@@ -28,6 +28,7 @@ func (c *podDisruptionBudgetsCheck) DefaultTimeout() time.Duration { return 60 *
 func (c *podDisruptionBudgetsCheck) DefaultOwner() upgradev1alpha1.CheckOwner {
 	return upgradev1alpha1.OwnerCustomer
 }
+func (c *podDisruptionBudgetsCheck) UpgradePhase() string { return "worker-upgrade" }
 
 func (c *podDisruptionBudgetsCheck) Run(ctx context.Context, deps CheckDependencies, logger logr.Logger, timeout time.Duration) CheckOutput {
 	if deps.DvoClientBuilder == nil {
@@ -89,6 +90,7 @@ func (c *pdbMasterInfraExtendedCheck) DefaultTimeout() time.Duration { return 60
 func (c *pdbMasterInfraExtendedCheck) DefaultOwner() upgradev1alpha1.CheckOwner {
 	return upgradev1alpha1.OwnerCustomer
 }
+func (c *pdbMasterInfraExtendedCheck) UpgradePhase() string { return "worker-upgrade" }
 
 func (c *pdbMasterInfraExtendedCheck) Run(ctx context.Context, deps CheckDependencies, logger logr.Logger, timeout time.Duration) CheckOutput {
 	nodeList := &corev1.NodeList{}
@@ -326,6 +328,7 @@ func (c *pdbDrainSafetyCheck) DefaultTimeout() time.Duration { return 60 * time.
 func (c *pdbDrainSafetyCheck) DefaultOwner() upgradev1alpha1.CheckOwner {
 	return upgradev1alpha1.OwnerCustomer
 }
+func (c *pdbDrainSafetyCheck) UpgradePhase() string { return "worker-upgrade" }
 
 func (c *pdbDrainSafetyCheck) Run(ctx context.Context, deps CheckDependencies, logger logr.Logger, timeout time.Duration) CheckOutput {
 	pdbList := &policyv1.PodDisruptionBudgetList{}

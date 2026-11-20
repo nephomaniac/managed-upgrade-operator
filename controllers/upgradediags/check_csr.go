@@ -22,6 +22,7 @@ func (c *pendingCSRsCheck) DefaultTimeout() time.Duration { return 0 }
 func (c *pendingCSRsCheck) DefaultOwner() upgradev1alpha1.CheckOwner {
 	return upgradev1alpha1.OwnerServiceTeam
 }
+func (c *pendingCSRsCheck) UpgradePhase() string { return "worker-upgrade" }
 
 func (c *pendingCSRsCheck) Run(ctx context.Context, deps CheckDependencies, logger logr.Logger, timeout time.Duration) CheckOutput {
 	csrList := &certificatesv1.CertificateSigningRequestList{}

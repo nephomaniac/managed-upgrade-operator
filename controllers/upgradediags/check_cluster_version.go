@@ -23,6 +23,7 @@ func (c *clusterVersionCheck) DefaultTimeout() time.Duration  { return 0 }
 func (c *clusterVersionCheck) DefaultOwner() upgradev1alpha1.CheckOwner {
 	return upgradev1alpha1.OwnerServiceTeam
 }
+func (c *clusterVersionCheck) UpgradePhase() string { return "control-plane" }
 
 func (c *clusterVersionCheck) Run(ctx context.Context, deps CheckDependencies, logger logr.Logger, timeout time.Duration) CheckOutput {
 	cvClient := deps.CvClientBuilder.New(deps.Client)
@@ -54,6 +55,7 @@ func (c *upgradeInFlightCheck) DefaultTimeout() time.Duration  { return 0 }
 func (c *upgradeInFlightCheck) DefaultOwner() upgradev1alpha1.CheckOwner {
 	return upgradev1alpha1.OwnerServiceTeam
 }
+func (c *upgradeInFlightCheck) UpgradePhase() string { return "control-plane" }
 
 func (c *upgradeInFlightCheck) Run(ctx context.Context, deps CheckDependencies, logger logr.Logger, timeout time.Duration) CheckOutput {
 	cvClient := deps.CvClientBuilder.New(deps.Client)

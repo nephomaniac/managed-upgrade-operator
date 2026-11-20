@@ -39,6 +39,10 @@ export interface DiagsCheckResult {
   owner?: CheckOwner;
   ownerLabel?: string;
   action?: string;
+  /** upgradePhase is injected by the backend from the check's UpgradePhase() method.
+   *  Values: "pre-checks" | "control-plane" | "operators" | "worker-upgrade".
+   *  Use this to correlate findings with their upgrade phase — no frontend mapping needed. */
+  upgradePhase?: string;
   timeoutSeconds: number;
   execution: CheckExecution;
   structuredFindings?: StructuredFinding[];
