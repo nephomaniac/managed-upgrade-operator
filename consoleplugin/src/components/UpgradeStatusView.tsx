@@ -890,9 +890,6 @@ type StepperStatus = 'done' | 'active' | 'pending' | 'failed' | 'warning' | 'ski
 // Phase order for upgrade progress. 'failed' is not in the sequence (handled separately).
 const STEP_PHASE_ORDER = ['not-started', 'pre-checks', 'control-plane', 'operators', 'worker-upgrade', 'complete'];
 
-// Phase mapping is now carried by the backend: each check's UpgradePhase() method
-// sets DiagsCheckResult.upgradePhase. The frontend reads c.upgradePhase directly —
-// no hardcoded map needed. New checks are automatically correlated.
 
 // Context type describing how relevant a preflight check snapshot is relative to the current
 // upgrade state. Used to drive banner wording and re-run suggestions.
