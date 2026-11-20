@@ -27,7 +27,7 @@ const T = {
 const UPGRADEDIAGS_DESCRIPTION_ANNOTATION = 'upgradediags.managed.openshift.io/description';
 
 const SEVERITY: Record<CheckResult, number> = {
-  Error: 0, Failed: 1, Warning: 2, Unknown: 3, Passed: 4, Skipped: 5, TimedOut: 6,
+  Failed: 0, Error: 1, Warning: 2, Unknown: 3, Passed: 4, Skipped: 5, TimedOut: 6,
 };
 
 const humanize = (s: string) => s.replace(/([a-z])([A-Z])/g, '$1 $2');
@@ -47,7 +47,7 @@ const truncate = (s: string, max = 100): string =>
 
 const checkBorderColor = (result: CheckResult): string => {
   if (result === 'Failed')  return T.danger;
-  if (result === 'Error')   return T.warning;
+  if (result === 'Error')   return T.danger;
   if (result === 'Warning') return T.warning;
   if (result === 'Passed')  return T.success;
   return 'transparent';

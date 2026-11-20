@@ -38,10 +38,10 @@ interface Config {
 const CONFIG: Record<CheckResult, Config> = {
   Passed:   { label: 'Passed',    bg: C.successBg, fg: C.success, border: C.border, icon: <CheckCircleIcon /> },
   Failed:   { label: 'Failed',    bg: C.dangerBg,  fg: C.danger,  border: C.border, icon: <TimesCircleIcon /> },
-  Error:    { label: 'Error',     bg: C.warningBg, fg: C.warning, border: C.border, icon: <ExclamationCircleIcon /> },
+  Error:    { label: 'Error',     bg: C.dangerBg,  fg: C.danger,  border: C.border, icon: <ExclamationCircleIcon /> },
   Warning:  { label: 'Warning',   bg: C.warningBg, fg: C.warning, border: C.border, icon: <ExclamationTriangleIcon /> },
   Skipped:  { label: 'Skipped',   bg: C.subtleBg,  fg: C.subtle,  border: C.border, icon: <BanIcon /> },
-  TimedOut: { label: 'Timed Out', bg: C.warningBg, fg: C.warning, border: C.border, icon: <ClockIcon /> },
+  TimedOut: { label: 'Timed Out', bg: C.dangerBg,  fg: C.danger,  border: C.border, icon: <ClockIcon /> },
   Unknown:  { label: 'Unknown',   bg: C.subtleBg,  fg: C.subtle,  border: C.border, icon: <QuestionCircleIcon /> },
 };
 
