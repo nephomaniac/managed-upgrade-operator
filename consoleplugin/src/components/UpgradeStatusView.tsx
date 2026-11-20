@@ -2,9 +2,10 @@ import * as React from 'react';
 import { Alert, Button, Spinner } from '@patternfly/react-core';
 import { SyncAltIcon, CaretDownIcon, CaretRightIcon } from '@patternfly/react-icons';
 import { consoleFetch, useK8sWatchResource } from '@openshift-console/dynamic-plugin-sdk';
-import { type UpgradeDiagsCheck, type DiagsCheckResult } from '../types';
+import { type UpgradeDiagsCheck, type DiagsCheckResult, type UpgradeHistoryResponse } from '../types';
 
-const STATUS_API = '/api/proxy/plugin/managed-upgrade-operator/muo-api/api/v1/upgrade-status';
+const STATUS_API  = '/api/proxy/plugin/managed-upgrade-operator/muo-api/api/v1/upgrade-status';
+const HISTORY_API = '/api/proxy/plugin/managed-upgrade-operator/muo-api/api/v1/upgrade-status/history';
 const MUO_NS = 'openshift-managed-upgrade-operator';
 
 // PF semantic design tokens — single source of truth for all colors in this file.
@@ -21,6 +22,8 @@ const T = {
   dangerBg:   'var(--pf-t--global--background--color--status--danger--default)',
   warningBg:  'var(--pf-t--global--background--color--status--warning--default)',
   infoBg:     'var(--pf-t--global--background--color--status--info--default)',
+  successBg:  'var(--pf-t--global--background--color--status--success--default)',
+  headerBg:   'var(--pf-t--global--background--color--secondary--default)',
   radiusPill: 'var(--pf-t--global--border--radius--pill)',
   radiusLg:   'var(--pf-t--global--border--radius--lg)',
   radiusMd:   'var(--pf-t--global--border--radius--md)',
@@ -1516,6 +1519,7 @@ export const UpgradeStatusView: React.FC<UpgradeStatusViewProps> = ({ onRunCheck
   const [error, setError]           = React.useState<string | null>(null);
   const [lastRefresh, setLastRefresh] = React.useState<Date | null>(null);
   const [refreshing, setRefreshing] = React.useState(false);
+  const [history, setHistory]       = React.useState<UpgradeHistoryResponse | null>(null);
 
   // Watch UpgradeDiagsCheck CRs to surface preflight results for the current upgrade target.
   const [diagsChecks] = useK8sWatchResource<UpgradeDiagsCheck[]>({
@@ -1598,11 +1602,26 @@ export const UpgradeStatusView: React.FC<UpgradeStatusViewProps> = ({ onRunCheck
     }
   }, []);
 
+  const fetchHistory = React.useCallback(async () => {
+    try {
+      const resp = await consoleFetch(HISTORY_API);
+      if (!resp.ok) return;
+      const data: UpgradeHistoryResponse = await resp.json();
+      setHistory(data);
+    } catch {
+      // history is best-effort — don't surface an error for it
+    }
+  }, []);
+
   React.useEffect(() => {
     fetchStatus();
     const interval = setInterval(() => fetchStatus(), 30_000);
     return () => clearInterval(interval);
   }, [fetchStatus]);
+
+  React.useEffect(() => {
+    fetchHistory();
+  }, [fetchHistory]);
 
   const cardStyle: React.CSSProperties = {
     border: `1px solid ${T.border}`,
@@ -1904,6 +1923,94 @@ export const UpgradeStatusView: React.FC<UpgradeStatusViewProps> = ({ onRunCheck
             <MachineHealthChecksCard mhcs={snapshot.machineHealthChecks} />
           )}
         </>
+      )}
+
+      {/* ---- Upgrade History ---- */}
+      {history && history.history && history.history.length > 0 && (
+        <div style={cardStyle}>
+          <SectionHeader
+            title="Upgrade History"
+            badge={
+              history.currentChannel
+                ? <span style={{
+                    fontSize: 11, fontWeight: 600, background: T.infoBg,
+                    border: `1px solid ${T.info}55`, borderRadius: T.radiusPill,
+                    padding: '2px 8px', color: T.info,
+                  }}>
+                    {history.currentChannel}
+                  </span>
+                : undefined
+            }
+          />
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+              <thead>
+                <tr style={{ background: T.headerBg }}>
+                  {(['Version', 'State', 'Started', 'Completed', 'Duration'] as const).map(h => (
+                    <th key={h} style={{
+                      padding: '8px 16px', textAlign: 'left',
+                      fontSize: 11, fontWeight: 600, color: T.textSubtle,
+                      textTransform: 'uppercase', letterSpacing: '0.05em',
+                      borderBottom: `1px solid ${T.border}`,
+                    }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {history.history.map((entry, i) => {
+                  const isCompleted = entry.state === 'Completed';
+                  const isPartial   = entry.state === 'Partial';
+                  const stateColor  = isCompleted ? T.success : isPartial ? T.warning : T.textMuted;
+                  const stateBg     = isCompleted ? T.successBg : isPartial ? T.warningBg : 'transparent';
+
+                  const fmtDate = (iso?: string) => {
+                    if (!iso) return '—';
+                    const d = new Date(iso);
+                    return d.toLocaleString(undefined, {
+                      year: 'numeric', month: 'short', day: 'numeric',
+                      hour: '2-digit', minute: '2-digit',
+                    });
+                  };
+
+                  return (
+                    <tr key={i} style={{ borderBottom: `1px solid ${T.border}` }}>
+                      {/* Version: fromVersion → version */}
+                      <td style={{ padding: '10px 16px', fontFamily: 'monospace', fontWeight: 600 }}>
+                        {entry.fromVersion
+                          ? <>{entry.fromVersion} <span style={{ color: T.textSubtle }}>→</span> {entry.version}</>
+                          : entry.version
+                        }
+                      </td>
+                      {/* State badge */}
+                      <td style={{ padding: '10px 16px' }}>
+                        <span style={{
+                          display: 'inline-block', fontSize: 11, fontWeight: 600,
+                          padding: '2px 8px', borderRadius: T.radiusPill,
+                          background: stateBg, color: stateColor,
+                          border: `1px solid ${stateColor}55`,
+                        }}>
+                          {entry.state}
+                        </span>
+                      </td>
+                      {/* Started */}
+                      <td style={{ padding: '10px 16px', color: T.textSubtle, whiteSpace: 'nowrap' }}>
+                        {fmtDate(entry.startedAt)}
+                      </td>
+                      {/* Completed */}
+                      <td style={{ padding: '10px 16px', color: T.textSubtle, whiteSpace: 'nowrap' }}>
+                        {fmtDate(entry.completedAt)}
+                      </td>
+                      {/* Duration */}
+                      <td style={{ padding: '10px 16px', fontWeight: entry.elapsedSeconds ? 600 : 400 }}>
+                        {entry.elapsedSeconds ? fmtElapsed(entry.elapsedSeconds) : '—'}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
       )}
     </div>
   );

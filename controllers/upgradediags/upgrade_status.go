@@ -191,10 +191,15 @@ type MachineHealthCheckStatus struct {
 // UpgradeHistoryEntry is one entry from ClusterVersion's upgrade history.
 type UpgradeHistoryEntry struct {
 	Version     string       `json:"version"`
+	// FromVersion is the version this cluster was on before upgrading to Version.
+	// Derived from the next-older history entry.
+	FromVersion string       `json:"fromVersion,omitempty"`
 	State       string       `json:"state"`
 	StartedAt   *metav1.Time `json:"startedAt,omitempty"`
 	CompletedAt *metav1.Time `json:"completedAt,omitempty"`
-	Message     string       `json:"message,omitempty"`
+	// ElapsedSeconds is the duration of the upgrade (completedAt - startedAt).
+	ElapsedSeconds int64  `json:"elapsedSeconds,omitempty"`
+	Message        string `json:"message,omitempty"`
 }
 
 // ---- HTTP routing ----------------------------------------------------------
@@ -243,12 +248,17 @@ func (s *UpgradeDiagsHTTPServer) handleStatusHistory(w http.ResponseWriter, r *h
 		http.Error(w, "Failed to read ClusterVersion: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
+
+	// History is ordered most-recent-first. The "from version" of entry[i] is entry[i+1].version.
 	entries := make([]UpgradeHistoryEntry, 0, len(cv.Status.History))
-	for _, h := range cv.Status.History {
+	for i, h := range cv.Status.History {
 		e := UpgradeHistoryEntry{
 			Version: h.Version,
 			State:   string(h.State),
 			Message: h.AcceptedRisks,
+		}
+		if i+1 < len(cv.Status.History) {
+			e.FromVersion = cv.Status.History[i+1].Version
 		}
 		if !h.StartedTime.IsZero() {
 			t := metav1.NewTime(h.StartedTime.Time)
@@ -257,12 +267,18 @@ func (s *UpgradeDiagsHTTPServer) handleStatusHistory(w http.ResponseWriter, r *h
 		if h.CompletionTime != nil && !h.CompletionTime.IsZero() {
 			t := metav1.NewTime(h.CompletionTime.Time)
 			e.CompletedAt = &t
+			if !h.StartedTime.IsZero() {
+				e.ElapsedSeconds = int64(h.CompletionTime.Sub(h.StartedTime.Time).Seconds())
+			}
 		}
 		entries = append(entries, e)
 	}
+
 	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"history": entries,
-		"total":   len(entries),
+		"currentVersion": currentVersion(cv),
+		"currentChannel": cv.Spec.Channel,
+		"history":        entries,
+		"total":          len(entries),
 	})
 }
 

@@ -67,3 +67,20 @@ export interface UpgradeDiagsCheck extends K8sResourceCommon {
   };
   status?: UpgradeDiagsCheckStatus;
 }
+
+export interface UpgradeHistoryEntry {
+  version: string;
+  fromVersion?: string;
+  state: string;           // "Completed" | "Partial"
+  startedAt?: string;
+  completedAt?: string;
+  elapsedSeconds?: number;
+  message?: string;        // AcceptedRisks, if any
+}
+
+export interface UpgradeHistoryResponse {
+  currentVersion: string;
+  currentChannel: string;
+  history: UpgradeHistoryEntry[];
+  total: number;
+}
