@@ -52,6 +52,7 @@ type OcmClient interface {
 	GetCluster() (*cmv1.Cluster, error)
 	GetClusterUpgradePolicies(clusterId string) (*cmv1.UpgradePoliciesListResponse, error)
 	GetClusterUpgradePolicyState(policyId string, clusterId string) (*cmv1.UpgradePolicyState, error)
+	GetLimitedSupportReasons(clusterId string) ([]*cmv1.LimitedSupportReason, error)
 	PostServiceLog(sl *ServiceLog, description string) error
 	SetState(value string, description string, policyId string, clusterId string) error
 }
@@ -233,6 +234,28 @@ func (s *ocmClient) GetClusterUpgradePolicyState(policyId string, clusterId stri
 	}
 
 	return response.Body(), nil
+}
+
+// GetLimitedSupportReasons returns all active Limited Support reasons for a cluster.
+func (s *ocmClient) GetLimitedSupportReasons(clusterId string) ([]*cmv1.LimitedSupportReason, error) {
+	response, err := s.conn.ClustersMgmt().V1().
+		Clusters().
+		Cluster(clusterId).
+		LimitedSupportReasons().
+		List().
+		Send()
+	if err != nil {
+		return nil, fmt.Errorf("can't list limited support reasons for cluster %s: %w", clusterId, err)
+	}
+	if response.Status() >= 400 {
+		return nil, fmt.Errorf("received error code %v from OCM limited support reasons", response.Status())
+	}
+	var reasons []*cmv1.LimitedSupportReason
+	response.Items().Each(func(r *cmv1.LimitedSupportReason) bool {
+		reasons = append(reasons, r)
+		return true
+	})
+	return reasons, nil
 }
 
 // PostServiceLog allows to send a generic servicelog to a cluster.

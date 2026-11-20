@@ -10,6 +10,7 @@ import (
 	"github.com/openshift/managed-upgrade-operator/pkg/dvo"
 	"github.com/openshift/managed-upgrade-operator/pkg/machinery"
 	"github.com/openshift/managed-upgrade-operator/pkg/metrics"
+	"github.com/openshift/managed-upgrade-operator/pkg/ocm"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -21,6 +22,7 @@ type CheckDependencies struct {
 	CvClientBuilder      cv.ClusterVersionBuilder
 	Machinery            machinery.Machinery
 	DvoClientBuilder     dvo.DvoClientBuilder
+	OcmClientBuilder     ocm.OcmClientBuilder
 	// DesiredVersion is the target upgrade version from the CR spec.
 	DesiredVersion string
 	// DesiredChannel is the target upgrade channel from the CR spec.

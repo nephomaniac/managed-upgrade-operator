@@ -11,6 +11,7 @@ import (
 	"github.com/openshift/managed-upgrade-operator/pkg/dvo"
 	"github.com/openshift/managed-upgrade-operator/pkg/machinery"
 	"github.com/openshift/managed-upgrade-operator/pkg/metrics"
+	"github.com/openshift/managed-upgrade-operator/pkg/ocm"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -32,20 +33,18 @@ const (
 	deleteAfterAnnotation = "upgradediags.managed.openshift.io/delete-after"
 )
 
-// ocmOnlyChecks lists checks that require OCM API access and therefore cannot run
-// inside MUO. These should be implemented in an external OCM-side eligibility layer
-// (e.g. ROSA CLI, OCM tooling). Documented here so they are not mistakenly re-implemented
-// in-cluster without the necessary OCM client support.
+// remainingOCMGaps lists OCM-side checks that still require work beyond what
+// ocmLimitedSupportCheck and ocmUpgradePolicyCheck already cover.
 //
-//   - LIMITED_SUPPORT: Whether the cluster is in Limited Support; OCM-only state.
 //   - NO_TARGETS_AVAILABLE / AT_LATEST_VERSION: ROSA-enabled upgrade graph; OCM owns the
 //     list of ROSA-approved versions. The CVO's availableUpdates field is a partial proxy
-//     but does not reflect ROSA enablement gating.
+//     but does not reflect ROSA enablement gating. Needs an OCM upgrade graph API call.
 //   - TARGET_NOT_AVAILABLE: Whether a requested version exists in the ROSA upgrade graph.
+//     Same gap — needs OCM upgrade graph visibility.
 //   - GATE_UNACKED (OCM-side gates): Version gate agreements are stored in OCM. The
 //     AdminAcks check covers the in-cluster admin-acks ConfigMap; OCM gate agreements
-//     require the OCM API (ListGateAgreements).
-var _ = "ocmOnlyChecks — see comment above"
+//     require the OCM API (ListGateAgreements). MCS-1511.
+var _ = "remainingOCMGaps — see comment above"
 
 // ReconcileUpgradeDiagsCheck reconciles UpgradeDiagsCheck objects.
 type ReconcileUpgradeDiagsCheck struct {
@@ -55,6 +54,7 @@ type ReconcileUpgradeDiagsCheck struct {
 	CvClientBuilder      cv.ClusterVersionBuilder
 	Machinery            machinery.Machinery
 	DvoClientBuilder     dvo.DvoClientBuilder
+	OcmClientBuilder     ocm.OcmClientBuilder
 }
 
 func (r *ReconcileUpgradeDiagsCheck) pruneAndCount(ctx context.Context, namespace, skipName string, logger logr.Logger) (int, error) {
@@ -227,6 +227,7 @@ func (r *ReconcileUpgradeDiagsCheck) runChecks(
 		CvClientBuilder:      r.CvClientBuilder,
 		Machinery:            r.Machinery,
 		DvoClientBuilder:     r.DvoClientBuilder,
+		OcmClientBuilder:     r.OcmClientBuilder,
 		DesiredVersion:       instance.Spec.Desired.Version,
 		DesiredChannel:       instance.Spec.Desired.Channel,
 	}

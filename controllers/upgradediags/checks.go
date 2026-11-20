@@ -41,4 +41,7 @@ var registeredChecks = []DiagnosticsCheck{
 	&consolePluginReferencesCheck{},
 	&clusterAutoscalerConfigCheck{},
 	&upgradeConfigConsistencyCheck{},
+	// ---- OCM API checks ----
+	&ocmLimitedSupportCheck{},
+	&ocmUpgradePolicyCheck{},
 }

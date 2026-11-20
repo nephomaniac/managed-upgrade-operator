@@ -86,6 +86,21 @@ func (mr *MockOcmClientMockRecorder) GetClusterUpgradePolicyState(arg0, arg1 any
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetClusterUpgradePolicyState", reflect.TypeOf((*MockOcmClient)(nil).GetClusterUpgradePolicyState), arg0, arg1)
 }
 
+// GetLimitedSupportReasons mocks base method.
+func (m *MockOcmClient) GetLimitedSupportReasons(arg0 string) ([]*v1.LimitedSupportReason, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetLimitedSupportReasons", arg0)
+	ret0, _ := ret[0].([]*v1.LimitedSupportReason)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetLimitedSupportReasons indicates an expected call of GetLimitedSupportReasons.
+func (mr *MockOcmClientMockRecorder) GetLimitedSupportReasons(arg0 any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetLimitedSupportReasons", reflect.TypeOf((*MockOcmClient)(nil).GetLimitedSupportReasons), arg0)
+}
+
 // PostServiceLog mocks base method.
 func (m *MockOcmClient) PostServiceLog(arg0 *ocm.ServiceLog, arg1 string) error {
 	m.ctrl.T.Helper()

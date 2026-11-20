@@ -269,6 +269,13 @@ func (s *ocmClient) PostServiceLog(sl *ocm.ServiceLog, description string) error
 	return nil
 }
 
+// GetLimitedSupportReasons is not supported by the OCM Agent client.
+// The OCM Agent is an in-cluster proxy that exposes only a subset of OCM APIs;
+// Limited Support reasons are not part of that subset. Use the full OCM client instead.
+func (s *ocmClient) GetLimitedSupportReasons(clusterId string) ([]*cmv1.LimitedSupportReason, error) {
+	return nil, fmt.Errorf("GetLimitedSupportReasons is not supported by the OCM Agent client")
+}
+
 func parseOcmBaseUrl(ocmBaseUrl *url.URL) (*url.URL, error) {
 	url, err := url.Parse(ocmBaseUrl.String())
 	return url, err

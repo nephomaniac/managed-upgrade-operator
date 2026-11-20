@@ -64,6 +64,7 @@ import (
 	"github.com/openshift/managed-upgrade-operator/pkg/configmanager"
 	"github.com/openshift/managed-upgrade-operator/pkg/drain"
 	"github.com/openshift/managed-upgrade-operator/pkg/dvo"
+	"github.com/openshift/managed-upgrade-operator/pkg/ocm"
 	"github.com/openshift/managed-upgrade-operator/pkg/eventmanager"
 	"github.com/openshift/managed-upgrade-operator/pkg/k8sutil"
 	"github.com/openshift/managed-upgrade-operator/pkg/machinery"
@@ -377,6 +378,7 @@ func runUpgradeDiags() {
 		CvClientBuilder:      cv.NewBuilder(),
 		Machinery:            machinery.NewMachinery(),
 		DvoClientBuilder:     dvo.NewBuilder(),
+		OcmClientBuilder:     ocm.NewBuilder(),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create UpgradeDiagsCheck controller")
 		os.Exit(1)
