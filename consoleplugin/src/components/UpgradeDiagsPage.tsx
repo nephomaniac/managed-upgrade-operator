@@ -90,7 +90,7 @@ const CheckSummary: React.FC<{ pfc: UpgradeDiagsCheck }> = ({ pfc }) => {
 type Tab = 'checks' | 'status';
 
 const TAB_LABELS: Record<Tab, string> = {
-  checks: 'Diagnostics Checks',
+  checks: 'Diagnostics',
   status: 'Upgrade Status',
 };
 
@@ -124,6 +124,7 @@ const TabDescription: React.FC<{ summary: string; detail: string }> = ({ summary
           borderLeft: `3px solid ${T.info}`,
           borderRadius: T.radiusSm,
           fontSize: 13, color: T.textSubtle, lineHeight: 1.6, maxWidth: 860,
+          whiteSpace: 'pre-wrap',
         }}>
           {detail}
         </div>
@@ -242,12 +243,12 @@ export const UpgradeDiagsPage: React.FC = () => {
       <TabDescription
         summary={
           activeTab === 'checks'
-            ? 'Diagnostics Checks — Run a read-only preflight analysis against a target version and channel before committing to an upgrade.'
+            ? 'Diagnostics — Read-only cluster analysis against a target upgrade version. Run at any time: before, during, or after an upgrade.'
             : 'Upgrade Status — Live snapshot of an in-progress or recently completed cluster upgrade. Auto-refreshes every 30s.'
         }
         detail={
           activeTab === 'checks'
-            ? 'Checks are entirely read-only and non-intrusive. No upgrade is triggered. They inspect current cluster state to identify potential roadblocks: admin acknowledgements, critical alerts, PodDisruptionBudgets that could stall node drains, and pull secret validity. Use the results to build confidence and address issues before scheduling a maintenance window.'
+            ? 'Each diagnostic check is entirely read-only — no upgrade is triggered and no cluster state is modified. Checks inspect the current cluster against a target version and channel to surface issues across multiple categories: admin acknowledgements, critical alerts, PodDisruptionBudgets that could stall node drains, pull secret validity, operator health, and more.\n\nUseful at every stage of an upgrade lifecycle: assess readiness before scheduling a maintenance window, diagnose why an in-progress upgrade is delayed or stuck, understand what failed after an unsuccessful upgrade, or validate cluster health at any point in time.'
             : 'Tracks ClusterVersion, ClusterOperators, MachineConfigPools, nodes, and MachineHealthChecks. Click any operator or node row to drill into conditions, PDB drain blockers, cloud-provider errors, and K8s node conditions — with actionable remediation guidance inline.'
         }
       />
@@ -277,10 +278,10 @@ export const UpgradeDiagsPage: React.FC = () => {
         {loaded && !loadError && sorted.length === 0 && !createOpen && (
           <EmptyState>
             <EmptyStateBody>
-              Run upgrade upgrade diags checks to validate cluster health before upgrading.
+              No diagnostic checks have been run yet. Run a diagnostic check at any time to assess cluster upgrade readiness, diagnose an in-progress or delayed upgrade, or analyse a failed upgrade.
             </EmptyStateBody>
             <Button variant="primary" onClick={() => openCreate()} style={{ marginTop: 16, borderRadius: T.radiusMd }}>
-              Run New Check
+              Run Diagnostic Check
             </Button>
           </EmptyState>
         )}
@@ -406,7 +407,7 @@ export const UpgradeDiagsPage: React.FC = () => {
                   );
                 })}
 
-                {/* Run New Check row */}
+                {/* Run Diagnostic Check row */}
                 <tr>
                   <td
                     colSpan={6}
@@ -422,11 +423,11 @@ export const UpgradeDiagsPage: React.FC = () => {
                         icon={<PlusCircleIcon />}
                         onClick={() => openCreate()}
                       >
-                        Run New Check
+                        Run Diagnostic Check
                       </Button>
                     ) : (
                       <span style={{ color: T.textMuted, fontSize: 13 }}>
-                        Fill in the form below to run a new check
+                        Fill in the form below to run a diagnostic check
                       </span>
                     )}
                   </td>

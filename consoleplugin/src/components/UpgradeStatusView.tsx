@@ -984,10 +984,10 @@ const PreCheckFindingsCallout: React.FC<{ findings: DiagsCheckResult[]; checkCon
   const hasErrors = findings.some(c => c.result === 'Failed' || c.result === 'Error');
   const accent = hasErrors ? T.danger : T.warning;
   const contextLabel = checkContext === 'pre-upgrade-snapshot'
-    ? 'Pre-upgrade check'
+    ? 'Pre-upgrade snapshot'
     : checkContext === 'during-upgrade'
-    ? 'Check (during upgrade)'
-    : 'Pre-flight check';
+    ? 'During-upgrade snapshot'
+    : 'Diagnostic snapshot';
   return (
     <div style={{
       marginTop: 12, padding: '8px 12px',
@@ -1023,7 +1023,7 @@ const PreCheckFindingsCallout: React.FC<{ findings: DiagsCheckResult[]; checkCon
         })}
       </div>
       <div style={{ fontSize: 11, color: T.textMuted, marginTop: 6 }}>
-        See <strong>Diagnostics Checks</strong> tab for details and remediation steps.
+        See the <strong>Diagnostics</strong> tab for details and remediation steps.
       </div>
     </div>
   );
@@ -1674,10 +1674,10 @@ export const UpgradeStatusView: React.FC<UpgradeStatusViewProps> = ({ onRunCheck
                   display: 'flex', alignItems: 'center', gap: 12,
                 }}>
                   <div style={{ flex: 1, fontSize: 13, color: T.textSubtle }}>
-                    <strong style={{ color: T.info }}>No preflight check found for {tv}.</strong>
+                    <strong style={{ color: T.info }}>No diagnostic run found for {tv}.</strong>
                     {isComplete
-                      ? ' Run a diagnostics check for a retrospective analysis of this upgrade.'
-                      : ' Run a diagnostics check to identify potential roadblocks before or during this upgrade.'
+                      ? ' Run a diagnostic check to analyse what happened during this upgrade.'
+                      : ' Run a diagnostic check to assess cluster readiness or diagnose this upgrade.'
                     }
                   </div>
                   {onRunCheckRequested && (
@@ -1687,7 +1687,7 @@ export const UpgradeStatusView: React.FC<UpgradeStatusViewProps> = ({ onRunCheck
                       onClick={() => onRunCheckRequested(tv, ch)}
                       style={{ borderRadius: T.radiusMd, whiteSpace: 'nowrap' }}
                     >
-                      Run Check for {tv}
+                      Run Diagnostic for {tv}
                     </Button>
                   )}
                 </div>
@@ -1805,9 +1805,9 @@ export const UpgradeStatusView: React.FC<UpgradeStatusViewProps> = ({ onRunCheck
                     ? <>{preflightIssues.map(c => c.name.replace(/([a-z])([A-Z])/g, '$1 $2')).join(', ')}
                         {' — '}
                         {'See the '}
-                        <strong>Diagnostics Checks</strong>
+                        <strong>Diagnostics</strong>
                         {' tab for details and remediation steps.'}</>
-                    : <>All checks passed. See the <strong>Diagnostics Checks</strong> tab for the full report.</>
+                    : <>All checks passed. See the <strong>Diagnostics</strong> tab for the full report.</>
                   }
                 </div>
               </div>

@@ -230,7 +230,7 @@ export const CreateDiagsCheckForm: React.FC<Props> = ({ isOpen, onClose, onCreat
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 20 }}>
         <div>
           <div style={{ fontWeight: 700, fontSize: 18 }}>
-            {initialValues ? 'Re-run Upgrade Diagnostics' : 'Run Upgrade Diagnostics'}
+            {initialValues ? 'Re-run Diagnostic Check' : 'Run Diagnostic Check'}
           </div>
           {currentVersion && (
             <div style={{ marginTop: 4, fontSize: 13, color: T.textSubtle }}>
@@ -496,10 +496,10 @@ export const CreateDiagsCheckForm: React.FC<Props> = ({ isOpen, onClose, onCreat
             id="description"
             value={description}
             onChange={(_e, v) => setDescription(v)}
-            placeholder="e.g. Pre-upgrade validation for Q4 maintenance window"
+            placeholder="e.g. Pre-upgrade planning, in-progress upgrade diagnosis, post-failure analysis"
           />
           <FormHelperText>
-            <HelperText><HelperTextItem>Optional label stored with this check run</HelperTextItem></HelperText>
+            <HelperText><HelperTextItem>Optional label stored with this diagnostic run — useful for identifying its purpose later</HelperTextItem></HelperText>
           </FormHelperText>
         </FormGroup>
       </Form>
@@ -507,7 +507,7 @@ export const CreateDiagsCheckForm: React.FC<Props> = ({ isOpen, onClose, onCreat
       {/* Actions */}
       <div style={{ marginTop: 24, display: 'flex', gap: 12, alignItems: 'center' }}>
         <Button variant="primary" isLoading={submitting} isDisabled={!canSubmit} onClick={handleSubmit} style={{ borderRadius: T.radiusSm }}>
-          Run Checks
+          Run Diagnostic Check
         </Button>
         <Button variant="link" onClick={handleClose} isDisabled={submitting}>
           Cancel
