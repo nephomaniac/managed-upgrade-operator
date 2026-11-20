@@ -1471,9 +1471,12 @@ export const UpgradeStatusView: React.FC<UpgradeStatusViewProps> = ({ onRunCheck
   const checkIsStale = checkAgeMs !== null && checkAgeMs > 24 * 60 * 60 * 1000;
 
   const fmtAge = (ms: number) => {
-    if (ms < 3_600_000) return `${Math.floor(ms / 60_000)} min ago`;
-    if (ms < 86_400_000) return `${Math.floor(ms / 3_600_000)} hr ago`;
-    return `${Math.floor(ms / 86_400_000)} day(s) ago`;
+    const mins = Math.floor(ms / 60_000);
+    if (ms < 3_600_000)  return `${mins} min${mins !== 1 ? 's' : ''}`;
+    const hrs = Math.floor(ms / 3_600_000);
+    if (ms < 86_400_000) return `${hrs} hr${hrs !== 1 ? 's' : ''}`;
+    const days = Math.floor(ms / 86_400_000);
+    return `${days} day${days !== 1 ? 's' : ''}`;
   };
 
   const fetchStatus = React.useCallback(async (manual = false) => {
@@ -1666,11 +1669,23 @@ export const UpgradeStatusView: React.FC<UpgradeStatusViewProps> = ({ onRunCheck
             const bgColor   = hasErrors ? T.dangerBg  : hasIssues ? T.warningBg  : T.infoBg;
             const bdColor   = hasErrors ? T.danger     : hasIssues ? T.warning    : T.success;
             const hdColor   = hasErrors ? T.danger     : hasIssues ? T.warning    : T.success;
+            const issueCount = preflightIssues.length;
             const heading   = hasErrors
-              ? 'Preflight check failures detected — may be contributing to upgrade issues'
+              ? `Preflight checks found ${issueCount} issue${issueCount !== 1 ? 's' : ''} that may impact upgrade to ${tv}`
               : hasIssues
-              ? 'Preflight check warnings detected'
+              ? `Preflight checks found ${issueCount} warning${issueCount !== 1 ? 's' : ''} for upgrade to ${tv}`
               : `Preflight checks passed for ${tv}`;
+
+            // Snapshot timestamps — always shown so users can judge data freshness.
+            const checkStatus = matchingCheck.status;
+            const ranAt       = checkStatus?.startedAt   ? new Date(checkStatus.startedAt)   : null;
+            const completedAt = checkStatus?.completedAt ? new Date(checkStatus.completedAt) : null;
+            const snapshotAge = completedAt ?? ranAt;
+            const snapshotAgeMs = snapshotAge ? Date.now() - snapshotAge.getTime() : null;
+
+            const fmtTs = (d: Date) => d.toLocaleString(undefined, {
+              month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
+            });
 
             return (
               <div style={{
@@ -1678,35 +1693,52 @@ export const UpgradeStatusView: React.FC<UpgradeStatusViewProps> = ({ onRunCheck
                 background: bgColor,
                 borderLeft: `4px solid ${bdColor}`,
                 borderRadius: T.radiusSm,
-                display: 'flex', alignItems: 'flex-start', gap: 12,
               }}>
-                <div style={{ flex: 1 }}>
-                  <div style={{ fontWeight: 700, fontSize: 13, color: hdColor, marginBottom: 4 }}>
-                    {heading}
-                  </div>
-                  <div style={{ fontSize: 12, color: T.textSubtle }}>
-                    {hasIssues
-                      ? <>{preflightIssues.map(c => c.name.replace(/([a-z])([A-Z])/g, '$1 $2')).join(', ')}
-                          {' — '}
-                          {'See the '}
-                          <strong>Diagnostics Checks</strong>
-                          {' tab for details and remediation steps.'}</>
-                      : <>All checks passed. See the <strong>Diagnostics Checks</strong> tab for the full report.</>
-                    }
-                    {checkIsStale && checkAgeMs !== null && (
-                      <span style={{ marginLeft: 8, fontStyle: 'italic' }}>
-                        (Last run {fmtAge(checkAgeMs)} —{' '}
-                        {onRunCheckRequested
-                          ? <button
-                              onClick={() => onRunCheckRequested(tv, ch)}
-                              style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0,
-                                color: T.info, textDecoration: 'underline', font: 'inherit', fontSize: 12 }}
-                            >re-run now</button>
-                          : 'consider re-running'
-                        })
+                <div style={{ fontWeight: 700, fontSize: 13, color: hdColor, marginBottom: 4 }}>
+                  {heading}
+                </div>
+
+                {/* Snapshot age — always visible so users can judge data relevance */}
+                {ranAt && (
+                  <div style={{
+                    display: 'inline-flex', alignItems: 'center', gap: 6,
+                    fontSize: 11, color: checkIsStale ? T.warning : T.textMuted,
+                    background: checkIsStale ? `${T.warning}18` : T.bgSecondary,
+                    border: `1px solid ${checkIsStale ? `${T.warning}55` : T.border}`,
+                    borderRadius: T.radiusPill,
+                    padding: '2px 8px', marginBottom: 8,
+                  }}>
+                    {checkIsStale && <span style={{ fontWeight: 700 }}>⚠ Stale snapshot — </span>}
+                    <span>Run: {fmtTs(ranAt)}</span>
+                    {completedAt && completedAt.getTime() !== ranAt.getTime() && (
+                      <span style={{ color: T.textSubtle }}>· Completed: {fmtTs(completedAt)}</span>
+                    )}
+                    {snapshotAgeMs !== null && (
+                      <span style={{ color: checkIsStale ? T.warning : T.textSubtle }}>
+                        · {fmtAge(snapshotAgeMs)} ago
                       </span>
                     )}
+                    {checkIsStale && onRunCheckRequested && (
+                      <button
+                        onClick={() => onRunCheckRequested(tv, ch)}
+                        style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0,
+                          color: T.info, textDecoration: 'underline', font: 'inherit', fontSize: 11 }}
+                      >
+                        re-run now
+                      </button>
+                    )}
                   </div>
+                )}
+
+                <div style={{ fontSize: 12, color: T.textSubtle }}>
+                  {hasIssues
+                    ? <>{preflightIssues.map(c => c.name.replace(/([a-z])([A-Z])/g, '$1 $2')).join(', ')}
+                        {' — '}
+                        {'See the '}
+                        <strong>Diagnostics Checks</strong>
+                        {' tab for details and remediation steps.'}</>
+                    : <>All checks passed. See the <strong>Diagnostics Checks</strong> tab for the full report.</>
+                  }
                 </div>
               </div>
             );
