@@ -6,6 +6,7 @@ import { type UpgradeDiagsCheck, type DiagsCheckResult, type UpgradeHistoryRespo
 
 const STATUS_API  = '/api/proxy/plugin/managed-upgrade-operator/muo-api/api/v1/upgrade-status';
 const HISTORY_API = '/api/proxy/plugin/managed-upgrade-operator/muo-api/api/v1/upgrade-status/history';
+const VERSION_API = '/api/proxy/plugin/managed-upgrade-operator/muo-api/api/v1/version';
 const MUO_NS = 'openshift-managed-upgrade-operator';
 
 // PF semantic design tokens — single source of truth for all colors in this file.
@@ -1520,6 +1521,7 @@ export const UpgradeStatusView: React.FC<UpgradeStatusViewProps> = ({ onRunCheck
   const [lastRefresh, setLastRefresh] = React.useState<Date | null>(null);
   const [refreshing, setRefreshing] = React.useState(false);
   const [history, setHistory]       = React.useState<UpgradeHistoryResponse | null>(null);
+  const [muoVersion, setMuoVersion] = React.useState<{ version: string; gitCommit: string } | null>(null);
 
   // Watch UpgradeDiagsCheck CRs to surface preflight results for the current upgrade target.
   const [diagsChecks] = useK8sWatchResource<UpgradeDiagsCheck[]>({
@@ -1613,6 +1615,17 @@ export const UpgradeStatusView: React.FC<UpgradeStatusViewProps> = ({ onRunCheck
     }
   }, []);
 
+  const fetchVersion = React.useCallback(async () => {
+    try {
+      const resp = await consoleFetch(VERSION_API);
+      if (!resp.ok) return;
+      const data: { version: string; gitCommit: string } = await resp.json();
+      setMuoVersion(data);
+    } catch {
+      // version is best-effort
+    }
+  }, []);
+
   React.useEffect(() => {
     fetchStatus();
     const interval = setInterval(() => fetchStatus(), 30_000);
@@ -1622,6 +1635,10 @@ export const UpgradeStatusView: React.FC<UpgradeStatusViewProps> = ({ onRunCheck
   React.useEffect(() => {
     fetchHistory();
   }, [fetchHistory]);
+
+  React.useEffect(() => {
+    fetchVersion();
+  }, [fetchVersion]);
 
   const cardStyle: React.CSSProperties = {
     border: `1px solid ${T.border}`,
@@ -1656,6 +1673,16 @@ export const UpgradeStatusView: React.FC<UpgradeStatusViewProps> = ({ onRunCheck
         {lastRefresh && (
           <span style={{ fontSize: 12, color: T.textSubtle }}>
             Last refreshed {lastRefresh.toLocaleTimeString()}
+          </span>
+        )}
+        {muoVersion && (
+          <span style={{
+            marginLeft: 'auto', fontSize: 11, color: T.textMuted,
+            fontFamily: 'monospace', letterSpacing: '0.03em',
+          }}
+            title={`MUO version ${muoVersion.version} · commit ${muoVersion.gitCommit}`}
+          >
+            MUO {muoVersion.gitCommit === 'unknown' ? muoVersion.version : muoVersion.gitCommit.slice(0, 7)}
           </span>
         )}
       </div>
@@ -1757,6 +1784,7 @@ export const UpgradeStatusView: React.FC<UpgradeStatusViewProps> = ({ onRunCheck
 
             // No matching check for this target version
             if (!matchingCheck) {
+              const isComplete = snapshot.phase === 'complete';
               return (
                 <div style={{
                   marginBottom: 20, padding: '10px 16px',
@@ -1767,11 +1795,14 @@ export const UpgradeStatusView: React.FC<UpgradeStatusViewProps> = ({ onRunCheck
                 }}>
                   <div style={{ flex: 1, fontSize: 13, color: T.textSubtle }}>
                     <strong style={{ color: T.info }}>No preflight check found for {tv}.</strong>
-                    {' Run a diagnostics check to identify potential roadblocks before or during this upgrade.'}
+                    {isComplete
+                      ? ' Run a diagnostics check for a retrospective analysis of this upgrade.'
+                      : ' Run a diagnostics check to identify potential roadblocks before or during this upgrade.'
+                    }
                   </div>
                   {onRunCheckRequested && (
                     <Button
-                      variant="primary"
+                      variant={isComplete ? 'secondary' : 'primary'}
                       size="sm"
                       onClick={() => onRunCheckRequested(tv, ch)}
                       style={{ borderRadius: T.radiusMd, whiteSpace: 'nowrap' }}

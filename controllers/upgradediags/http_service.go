@@ -13,6 +13,7 @@ import (
 	"github.com/go-logr/logr"
 	"github.com/google/uuid"
 	upgradev1alpha1 "github.com/openshift/managed-upgrade-operator/api/v1alpha1"
+	"github.com/openshift/managed-upgrade-operator/version"
 	authnv1 "k8s.io/api/authentication/v1"
 	authzv1 "k8s.io/api/authorization/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -120,6 +121,7 @@ func (s *UpgradeDiagsHTTPServer) Start(ctx context.Context) error {
 	mux.HandleFunc("/api/v1/upgrade-status", s.routeStatus)
 	mux.HandleFunc("/api/v1/upgrade-status/", s.routeStatus)
 	mux.HandleFunc("/api/v1/available-versions", s.routeAvailableVersions)
+	mux.HandleFunc("/api/v1/version", s.routeVersion)
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
 
 	srv := &http.Server{
@@ -697,4 +699,21 @@ func (s *UpgradeDiagsHTTPServer) routeAvailableVersions(w http.ResponseWriter, r
 	}
 
 	http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+}
+
+// routeVersion handles GET /api/v1/version — no auth required, used by the console plugin to display build info.
+func (s *UpgradeDiagsHTTPServer) routeVersion(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	resp := struct {
+		Version   string `json:"version"`
+		GitCommit string `json:"gitCommit"`
+	}{
+		Version:   version.Version,
+		GitCommit: version.GitCommit,
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(resp)
 }

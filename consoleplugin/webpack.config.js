@@ -1,5 +1,12 @@
 const { ConsoleRemotePlugin } = require('@openshift-console/dynamic-plugin-sdk-webpack');
 const path = require('path');
+const { execSync } = require('child_process');
+const webpack = require('webpack');
+
+const gitCommit = (() => {
+  try { return execSync('git rev-parse --short HEAD', { stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim(); }
+  catch { return 'unknown'; }
+})();
 
 module.exports = {
   entry: {},
@@ -25,6 +32,9 @@ module.exports = {
     new ConsoleRemotePlugin({
       pluginMetadata: require('./plugin.json'),
       validateExtensionIntegrity: false,
+    }),
+    new webpack.DefinePlugin({
+      'process.env.PLUGIN_GIT_COMMIT': JSON.stringify(gitCommit),
     }),
   ],
   devServer: {
