@@ -890,6 +890,52 @@ type StepperStatus = 'done' | 'active' | 'pending' | 'failed' | 'warning' | 'ski
 // Phase order for upgrade progress. 'failed' is not in the sequence (handled separately).
 const STEP_PHASE_ORDER = ['not-started', 'pre-checks', 'control-plane', 'operators', 'worker-upgrade', 'complete'];
 
+// Maps each diagnostics check name to the upgrade phase it most directly validates.
+// Used to surface relevant pre-check findings inside each stepper station detail panel.
+const PHASE_CHECK_MAP: Record<string, string> = {
+  // Control plane readiness — these checks determine whether the upgrade can begin at all.
+  UpgradeTarget:                           'control-plane',
+  UpgradeTargetExtended:                   'control-plane',
+  UpgradeInFlight:                         'control-plane',
+  UpgradeableCondition:                    'control-plane',
+  UpgradeConfigConsistency:                'control-plane',
+  ClusterVersion:                          'control-plane',
+  AdminAcks:                               'control-plane',
+  PullSecretValid:                         'control-plane',
+  // Cluster operator health — directly maps to the Operators upgrade phase.
+  ClusterOperators:                        'operators',
+  ClusterOperatorsExtended:                'operators',
+  InstalledOperatorMaxVersion:             'operators',
+  ConsolePluginReferences:                 'operators',
+  // Worker node and drain safety — these affect the worker-upgrade phase.
+  PodDisruptionBudgets:                    'worker-upgrade',
+  PodDisruptionBudgetsDrainSafety:         'worker-upgrade',
+  PodDisruptionBudgetsMasterInfraExtended: 'worker-upgrade',
+  StuckDrainingNodes:                      'worker-upgrade',
+  StuckTerminatingPods:                    'worker-upgrade',
+  ManuallyCordonedNodes:                   'worker-upgrade',
+  ManuallyCordonedNodesExtended:           'worker-upgrade',
+  NodeUnschedulableTaints:                 'worker-upgrade',
+  NodeUnschedulableTaintsExtended:         'worker-upgrade',
+  WorkerNodeReadiness:                     'worker-upgrade',
+  PausedMachineConfigPool:                 'worker-upgrade',
+  PendingCSRs:                             'worker-upgrade',
+  ClusterAutoscalerConfig:                 'worker-upgrade',
+  // Cross-cutting — shown in the pre-checks station.
+  CriticalAlerts:                          'pre-checks',
+  CriticalAlertsExtended:                  'pre-checks',
+};
+
+// Context type describing how relevant a preflight check snapshot is relative to the current
+// upgrade state. Used to drive banner wording and re-run suggestions.
+type CheckContext =
+  | 'pre-upgrade-snapshot' // check ran before the current upgrade started — ideal
+  | 'during-upgrade'       // check ran after the upgrade started (less representative)
+  | 'fresh'                // <24h old, no active upgrade
+  | 'aging'                // 1–7d old, consider re-running
+  | 'stale'                // 7–30d old, cluster state likely changed
+  | 'very-stale';          // >30d old, strongly recommend re-run
+
 function getStepStatus(stationPhase: string, currentPhase: string, isFailed: boolean): StepperStatus {
   const stationIdx = STEP_PHASE_ORDER.indexOf(stationPhase);
   const currentIdx = STEP_PHASE_ORDER.indexOf(currentPhase);
@@ -1053,13 +1099,71 @@ interface StepStation {
   summary?: string;
 }
 
+// Small inline block shown inside a stepper station detail panel when preflight
+// findings map to that phase. Helps users connect pre-upgrade warnings to
+// what's happening now.
+const PreCheckFindingsCallout: React.FC<{ findings: DiagsCheckResult[]; checkContext: CheckContext | null }> = ({ findings, checkContext }) => {
+  if (findings.length === 0) return null;
+  const hasErrors = findings.some(c => c.result === 'Failed' || c.result === 'Error');
+  const accent = hasErrors ? T.danger : T.warning;
+  const contextLabel = checkContext === 'pre-upgrade-snapshot'
+    ? 'Pre-upgrade check'
+    : checkContext === 'during-upgrade'
+    ? 'Check (during upgrade)'
+    : 'Pre-flight check';
+  return (
+    <div style={{
+      marginTop: 12, padding: '8px 12px',
+      background: `${accent}10`,
+      border: `1px solid ${accent}44`,
+      borderLeft: `3px solid ${accent}`,
+      borderRadius: T.radiusSm,
+    }}>
+      <div style={{ fontSize: 11, fontWeight: 700, color: accent, textTransform: 'uppercase',
+        letterSpacing: '0.06em', marginBottom: 6 }}>
+        {contextLabel} findings for this phase
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+        {findings.map(c => {
+          const fc = c.result === 'Failed' || c.result === 'Error' ? T.danger : T.warning;
+          return (
+            <div key={c.name} style={{ display: 'flex', alignItems: 'baseline', gap: 8, fontSize: 12 }}>
+              <span style={{
+                flexShrink: 0, fontSize: 10, fontWeight: 700, padding: '1px 6px',
+                borderRadius: T.radiusPill, background: `${fc}22`, color: fc,
+                border: `1px solid ${fc}55`,
+              }}>
+                {c.result}
+              </span>
+              <span style={{ color: T.textSubtle }}>
+                {c.name.replace(/([a-z])([A-Z])/g, '$1 $2')}
+              </span>
+              {c.execution?.summary && (
+                <span style={{ color: T.textMuted, fontSize: 11 }}>— {c.execution.summary}</span>
+              )}
+            </div>
+          );
+        })}
+      </div>
+      <div style={{ fontSize: 11, color: T.textMuted, marginTop: 6 }}>
+        See <strong>Diagnostics Checks</strong> tab for details and remediation steps.
+      </div>
+    </div>
+  );
+};
+
 const UpgradePhaseStepper: React.FC<{
   snapshot: UpgradeSnapshot;
   matchingCheck: UpgradeDiagsCheck | null;
   preflightIssues: DiagsCheckResult[];
+  checkContext: CheckContext | null;
   onRunCheckRequested?: (version: string, channel: string) => void;
-}> = ({ snapshot, matchingCheck, preflightIssues, onRunCheckRequested }) => {
+}> = ({ snapshot, matchingCheck, preflightIssues, checkContext, onRunCheckRequested }) => {
   const isFailed = snapshot.phase === 'failed';
+
+  // Returns preflight issues that map to a specific stepper station.
+  const findingsForStation = (stationId: string) =>
+    preflightIssues.filter(c => PHASE_CHECK_MAP[c.name] === stationId);
 
   // Determine the "effective current phase" for getStepStatus when phase=failed.
   // We approximate: use the last phase that would have been active before failure.
@@ -1327,6 +1431,7 @@ const UpgradePhaseStepper: React.FC<{
                     </div>
                   )}
                 </div>
+                <PreCheckFindingsCallout findings={findingsForStation('control-plane')} checkContext={checkContext} />
               </>
             )}
 
@@ -1364,6 +1469,7 @@ const UpgradePhaseStepper: React.FC<{
                     ↓ Expand Cluster Operators below for per-operator details
                   </span>
                 </div>
+                <PreCheckFindingsCallout findings={findingsForStation('operators')} checkContext={checkContext} />
               </>
             )}
 
@@ -1404,6 +1510,7 @@ const UpgradePhaseStepper: React.FC<{
                     ↓ Expand Machine Config Pools below for node-level details
                   </span>
                 </div>
+                <PreCheckFindingsCallout findings={findingsForStation('worker-upgrade')} checkContext={checkContext} />
               </>
             )}
 
@@ -1463,12 +1570,38 @@ export const UpgradeStatusView: React.FC<UpgradeStatusViewProps> = ({ onRunCheck
     c => c.result === 'Failed' || c.result === 'Error' || c.result === 'Warning'
   ) ?? [];
 
-  // Check staleness: >24h since it completed (or started, if still running).
+  // Age of the check in ms (from completedAt, falling back to startedAt if still running).
   const checkAgeMs = React.useMemo(() => {
     const ts = matchingCheck?.status?.completedAt ?? matchingCheck?.status?.startedAt;
     return ts ? Date.now() - new Date(ts).getTime() : null;
   }, [matchingCheck]);
   const checkIsStale = checkAgeMs !== null && checkAgeMs > 24 * 60 * 60 * 1000;
+
+  // Classify how relevant the preflight check is relative to the current upgrade state.
+  // 'pre-upgrade-snapshot': check ran before the upgrade started — the ideal use case.
+  // 'during-upgrade':       check ran after the upgrade started (less representative).
+  // 'fresh/aging/stale/very-stale': no active upgrade; keyed on absolute age.
+  const checkContext: CheckContext | null = React.useMemo(() => {
+    if (!matchingCheck) return null;
+    const isActive = !!snapshot && snapshot.phase !== 'not-started' && snapshot.phase !== 'complete';
+    if (isActive && checkAgeMs !== null) {
+      // Estimate when the upgrade started: controlPlane.startedAt if available, else now - elapsedSeconds.
+      const upgradeStartMs = snapshot?.controlPlane?.startedAt
+        ? new Date(snapshot.controlPlane.startedAt).getTime()
+        : snapshot?.elapsedSeconds
+        ? Date.now() - snapshot.elapsedSeconds * 1000
+        : null;
+      if (upgradeStartMs !== null) {
+        const checkCompletedMs = Date.now() - checkAgeMs;
+        return checkCompletedMs < upgradeStartMs ? 'pre-upgrade-snapshot' : 'during-upgrade';
+      }
+    }
+    if (checkAgeMs === null) return null;
+    if (checkAgeMs < 24 * 3_600_000)   return 'fresh';      // <24h
+    if (checkAgeMs < 7 * 86_400_000)   return 'aging';      // 1–7d
+    if (checkAgeMs < 30 * 86_400_000)  return 'stale';      // 7–30d
+    return 'very-stale';                                      // >30d
+  }, [matchingCheck, snapshot, checkAgeMs]);
 
   const fmtAge = (ms: number) => {
     const mins = Math.floor(ms / 60_000);
@@ -1554,6 +1687,7 @@ export const UpgradeStatusView: React.FC<UpgradeStatusViewProps> = ({ onRunCheck
             snapshot={snapshot}
             matchingCheck={matchingCheck}
             preflightIssues={preflightIssues}
+            checkContext={checkContext}
             onRunCheckRequested={onRunCheckRequested}
           />
 
@@ -1698,37 +1832,76 @@ export const UpgradeStatusView: React.FC<UpgradeStatusViewProps> = ({ onRunCheck
                   {heading}
                 </div>
 
-                {/* Snapshot age — always visible so users can judge data relevance */}
-                {ranAt && (
-                  <div style={{
-                    display: 'inline-flex', alignItems: 'center', gap: 6,
-                    fontSize: 11, color: checkIsStale ? T.warning : T.textMuted,
-                    background: checkIsStale ? `${T.warning}18` : T.bgSecondary,
-                    border: `1px solid ${checkIsStale ? `${T.warning}55` : T.border}`,
-                    borderRadius: T.radiusPill,
-                    padding: '2px 8px', marginBottom: 8,
-                  }}>
-                    {checkIsStale && <span style={{ fontWeight: 700 }}>⚠ Stale snapshot — </span>}
-                    <span>Run: {fmtTs(ranAt)}</span>
-                    {completedAt && completedAt.getTime() !== ranAt.getTime() && (
-                      <span style={{ color: T.textSubtle }}>· Completed: {fmtTs(completedAt)}</span>
-                    )}
-                    {snapshotAgeMs !== null && (
-                      <span style={{ color: checkIsStale ? T.warning : T.textSubtle }}>
-                        · {fmtAge(snapshotAgeMs)} ago
-                      </span>
-                    )}
-                    {checkIsStale && onRunCheckRequested && (
-                      <button
-                        onClick={() => onRunCheckRequested(tv, ch)}
-                        style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0,
-                          color: T.info, textDecoration: 'underline', font: 'inherit', fontSize: 11 }}
-                      >
-                        re-run now
-                      </button>
-                    )}
-                  </div>
-                )}
+                {/* Context-aware snapshot relevance pill — always visible */}
+                {ranAt && (() => {
+                  const isPreUpgrade = checkContext === 'pre-upgrade-snapshot';
+                  const isDuringUpgrade = checkContext === 'during-upgrade';
+                  const isVeryStale = checkContext === 'very-stale';
+                  const isStale = checkContext === 'stale';
+                  const isAging = checkContext === 'aging';
+
+                  const pillColor = isPreUpgrade ? T.success
+                    : isDuringUpgrade ? T.info
+                    : isVeryStale ? T.danger
+                    : (isStale || isAging) ? T.warning
+                    : T.textMuted;
+
+                  const pillLabel = isPreUpgrade
+                    ? '✓ Pre-upgrade snapshot'
+                    : isDuringUpgrade
+                    ? 'Taken during upgrade'
+                    : isVeryStale
+                    ? '⚠ Very stale snapshot'
+                    : isStale
+                    ? '⚠ Stale snapshot'
+                    : isAging
+                    ? '⚠ Aging snapshot'
+                    : 'Recent snapshot';
+
+                  const showRerunLink = (isAging || isStale || isVeryStale) && onRunCheckRequested;
+
+                  return (
+                    <div style={{
+                      display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 6,
+                      marginBottom: 8,
+                    }}>
+                      <div style={{
+                        display: 'inline-flex', alignItems: 'center', gap: 6,
+                        fontSize: 11, fontWeight: isPreUpgrade ? 600 : 400,
+                        color: pillColor,
+                        background: `${pillColor}18`,
+                        border: `1px solid ${pillColor}55`,
+                        borderRadius: T.radiusPill,
+                        padding: '2px 8px',
+                      }}>
+                        <span>{pillLabel}</span>
+                        <span style={{ color: T.textSubtle }}>·</span>
+                        <span>Run: {fmtTs(ranAt)}</span>
+                        {completedAt && completedAt.getTime() !== ranAt.getTime() && (
+                          <span style={{ color: T.textSubtle }}>· Completed: {fmtTs(completedAt)}</span>
+                        )}
+                        {snapshotAgeMs !== null && (
+                          <span>· {fmtAge(snapshotAgeMs)} ago</span>
+                        )}
+                      </div>
+                      {showRerunLink && (
+                        <button
+                          onClick={() => onRunCheckRequested!(tv, ch)}
+                          style={{ background: 'none', border: `1px solid ${T.info}55`, cursor: 'pointer',
+                            padding: '2px 8px', borderRadius: T.radiusPill,
+                            color: T.info, font: 'inherit', fontSize: 11 }}
+                        >
+                          Re-run check
+                        </button>
+                      )}
+                      {isVeryStale && (
+                        <span style={{ fontSize: 11, color: T.danger, fontStyle: 'italic' }}>
+                          Cluster state may have changed significantly — results may not be relevant.
+                        </span>
+                      )}
+                    </div>
+                  );
+                })()}
 
                 <div style={{ fontSize: 12, color: T.textSubtle }}>
                   {hasIssues
