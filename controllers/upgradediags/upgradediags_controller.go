@@ -34,16 +34,15 @@ const (
 )
 
 // remainingOCMGaps lists OCM-side checks that still require work beyond what
-// ocmLimitedSupportCheck and ocmUpgradePolicyCheck already cover.
+// ocmLimitedSupportCheck, ocmUpgradePolicyCheck, and ocmVersionGateCheck already cover.
 //
-//   - NO_TARGETS_AVAILABLE / AT_LATEST_VERSION: ROSA-enabled upgrade graph; OCM owns the
-//     list of ROSA-approved versions. The CVO's availableUpdates field is a partial proxy
-//     but does not reflect ROSA enablement gating. Needs an OCM upgrade graph API call.
-//   - TARGET_NOT_AVAILABLE: Whether a requested version exists in the ROSA upgrade graph.
-//     Same gap — needs OCM upgrade graph visibility.
-//   - GATE_UNACKED (OCM-side gates): Version gate agreements are stored in OCM. The
-//     AdminAcks check covers the in-cluster admin-acks ConfigMap; OCM gate agreements
-//     require the OCM API (ListGateAgreements). MCS-1511.
+//   - NO_TARGETS_AVAILABLE / AT_LATEST_VERSION / TARGET_NOT_AVAILABLE: OCM/ROSA upgrade
+//     graph visibility. OCM owns the list of ROSA-approved versions and may silently omit
+//     a version that CVO and Cincinnati consider valid, with no structured reason exposed.
+//     The UpgradeTargetExtended check surfaces an advisory pointing admins to OCMVersionGates
+//     and OCMUpgradePolicy as the two most common causes, but a definitive check would
+//     require the OCM upgrade graph API to expose a blocked_reason or availability_state
+//     field. MCS-1506 tracks the upstream OCM API work.
 var _ = "remainingOCMGaps — see comment above"
 
 // ReconcileUpgradeDiagsCheck reconciles UpgradeDiagsCheck objects.

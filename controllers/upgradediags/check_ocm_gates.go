@@ -18,8 +18,7 @@ const (
 		"minor version boundary between the current cluster version and the target version. " +
 		"When upgrading across multiple minor versions (e.g. 4.22 → 4.27), gates for each boundary " +
 		"(4.23, 4.24, 4.25, 4.26, 4.27) are checked. Unacknowledged gates — such as API removal notices, " +
-		"STS permission updates, or ingress change acknowledgements — will block the upgrade at that boundary. " +
-		"Source: MCS-1511."
+		"STS permission updates, or ingress change acknowledgements — will block the upgrade at that boundary."
 )
 
 type ocmVersionGateCheck struct{}

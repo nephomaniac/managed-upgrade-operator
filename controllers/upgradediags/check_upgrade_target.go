@@ -25,6 +25,18 @@ const (
 		"graph and the live Cincinnati service, then compares the two. Surfaces upgrade type classification, " +
 		"cache vs live discrepancies, and full conditional update risk details so the consumer can make an " +
 		"informed upgrade decision."
+
+	// ocmGraphAdvisory is appended to passing and warning results to bridge the gap between
+	// CVO/Cincinnati validation and OCM-layer visibility. If CVO/Cincinnati say the version
+	// is valid but OCM or the rosa CLI does not offer it, the two most common causes are
+	// unacknowledged version gate prerequisites (OCMVersionGates) or an active upgrade policy
+	// or schedule block (OCMUpgradePolicy). This advisory surfaces that cross-check explicitly
+	// rather than leaving admins to discover it through trial-and-error.
+	ocmGraphAdvisory = "Note: This check validates the CVO and Cincinnati upgrade graph only. " +
+		"If this version is not offered in the OCM console or rosa CLI despite passing here, " +
+		"check OCMVersionGates for unacknowledged gate prerequisites and OCMUpgradePolicy " +
+		"for active policy or schedule blocks — these are the most common reasons OCM omits " +
+		"a version from its upgrade graph."
 )
 
 // --- UpgradeTarget (baseline) ---
@@ -215,7 +227,7 @@ func (c *upgradeTargetExtendedCheck) Run(ctx context.Context, deps CheckDependen
 		return CheckOutput{
 			Result:   upgradev1alpha1.CheckResultWarning,
 			Summary:  fmt.Sprintf("Version %s found in CVO cache but not confirmed by live Cincinnati — cache may be stale or version removed from graph", deps.DesiredVersion),
-			Findings: findings,
+			Findings: append(findings, ocmGraphAdvisory),
 			Action:   "Verify this version is still available on the channel before upgrading.",
 		}
 	}
@@ -227,7 +239,7 @@ func (c *upgradeTargetExtendedCheck) Run(ctx context.Context, deps CheckDependen
 			return CheckOutput{
 				Result:   upgradev1alpha1.CheckResultWarning,
 				Summary:  "Live Cincinnati query failed — upgrade target assessment based on CVO cache only",
-				Findings: findings,
+				Findings: append(findings, ocmGraphAdvisory),
 				Action:   "Verify network connectivity to the Cincinnati update service. CVO cache data may be stale.",
 			}
 		}
@@ -244,7 +256,7 @@ func (c *upgradeTargetExtendedCheck) Run(ctx context.Context, deps CheckDependen
 		return CheckOutput{
 			Result:   upgradev1alpha1.CheckResultWarning,
 			Summary:  fmt.Sprintf("Version %s confirmed by Cincinnati but not yet reflected in CVO cache — cache may be stale", deps.DesiredVersion),
-			Findings: findings,
+			Findings: append(findings, ocmGraphAdvisory),
 		}
 	}
 
@@ -253,6 +265,7 @@ func (c *upgradeTargetExtendedCheck) Run(ctx context.Context, deps CheckDependen
 	if cinCond != nil || cvoCond != nil {
 		summary = fmt.Sprintf("Version %s is a conditional %s upgrade — risks present but do not apply to this cluster", deps.DesiredVersion, upgradeType)
 	}
+	findings = append(findings, ocmGraphAdvisory)
 	return CheckOutput{
 		Result:   upgradev1alpha1.CheckPassed,
 		Summary:  summary,
