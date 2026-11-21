@@ -984,10 +984,10 @@ const PreCheckFindingsCallout: React.FC<{ findings: DiagsCheckResult[]; checkCon
   const hasErrors = findings.some(c => c.result === 'Failed' || c.result === 'Error');
   const accent = hasErrors ? T.danger : T.warning;
   const contextLabel = checkContext === 'pre-upgrade-snapshot'
-    ? 'Pre-upgrade snapshot'
+    ? 'Pre-upgrade report'
     : checkContext === 'during-upgrade'
-    ? 'During-upgrade snapshot'
-    : 'Diagnostic snapshot';
+    ? 'During-upgrade report'
+    : 'Diagnostic report';
   return (
     <div style={{
       marginTop: 12, padding: '8px 12px',
@@ -1023,7 +1023,7 @@ const PreCheckFindingsCallout: React.FC<{ findings: DiagsCheckResult[]; checkCon
         })}
       </div>
       <div style={{ fontSize: 11, color: T.textMuted, marginTop: 6 }}>
-        See the <strong>Diagnostics</strong> tab for details and remediation steps.
+        See the <strong>Reports</strong> tab for details and remediation steps.
       </div>
     </div>
   );
@@ -1674,10 +1674,10 @@ export const UpgradeStatusView: React.FC<UpgradeStatusViewProps> = ({ onRunCheck
                   display: 'flex', alignItems: 'center', gap: 12,
                 }}>
                   <div style={{ flex: 1, fontSize: 13, color: T.textSubtle }}>
-                    <strong style={{ color: T.info }}>No diagnostic run found for {tv}.</strong>
+                    <strong style={{ color: T.info }}>No diagnostic report found for {tv}.</strong>
                     {isComplete
-                      ? ' Run a diagnostic check to analyse what happened during this upgrade.'
-                      : ' Run a diagnostic check to assess cluster readiness or diagnose this upgrade.'
+                      ? ' Run diagnostics to generate a report analysing what happened during this upgrade.'
+                      : ' Run diagnostics to generate a report assessing cluster readiness or diagnosing this upgrade.'
                     }
                   </div>
                   {onRunCheckRequested && (
@@ -1687,7 +1687,7 @@ export const UpgradeStatusView: React.FC<UpgradeStatusViewProps> = ({ onRunCheck
                       onClick={() => onRunCheckRequested(tv, ch)}
                       style={{ borderRadius: T.radiusMd, whiteSpace: 'nowrap' }}
                     >
-                      Run Diagnostic for {tv}
+                      Run Diagnostics for {tv}
                     </Button>
                   )}
                 </div>
@@ -1729,7 +1729,7 @@ export const UpgradeStatusView: React.FC<UpgradeStatusViewProps> = ({ onRunCheck
                   {heading}
                 </div>
 
-                {/* Context-aware snapshot relevance pill — always visible */}
+                {/* Report context pill — age and upgrade-phase relevance, always visible */}
                 {ranAt && (() => {
                   const isPreUpgrade = checkContext === 'pre-upgrade-snapshot';
                   const isDuringUpgrade = checkContext === 'during-upgrade';
@@ -1744,16 +1744,16 @@ export const UpgradeStatusView: React.FC<UpgradeStatusViewProps> = ({ onRunCheck
                     : T.textMuted;
 
                   const pillLabel = isPreUpgrade
-                    ? '✓ Pre-upgrade snapshot'
+                    ? '✓ Pre-upgrade report'
                     : isDuringUpgrade
-                    ? 'Taken during upgrade'
+                    ? 'During-upgrade report'
                     : isVeryStale
-                    ? '⚠ Very stale snapshot'
+                    ? '⚠ Very old report'
                     : isStale
-                    ? '⚠ Stale snapshot'
+                    ? '⚠ Old report'
                     : isAging
-                    ? '⚠ Aging snapshot'
-                    : 'Recent snapshot';
+                    ? '⚠ Aging report'
+                    : 'Recent report';
 
                   const showRerunLink = (isAging || isStale || isVeryStale) && onRunCheckRequested;
 
@@ -1805,9 +1805,9 @@ export const UpgradeStatusView: React.FC<UpgradeStatusViewProps> = ({ onRunCheck
                     ? <>{preflightIssues.map(c => c.name.replace(/([a-z])([A-Z])/g, '$1 $2')).join(', ')}
                         {' — '}
                         {'See the '}
-                        <strong>Diagnostics</strong>
+                        <strong>Reports</strong>
                         {' tab for details and remediation steps.'}</>
-                    : <>All checks passed. See the <strong>Diagnostics</strong> tab for the full report.</>
+                    : <>All checks passed. See the <strong>Reports</strong> tab for the full report.</>
                   }
                 </div>
               </div>
