@@ -60,6 +60,7 @@ func (c *upgradeTargetCheck) Run(ctx context.Context, deps CheckDependencies, lo
 				fmt.Sprintf("currentVersion=%s", currentVersion),
 				fmt.Sprintf("targetVersion=%s", deps.DesiredVersion),
 				"The cluster is already running the requested version. This report may have been run to assess cluster health or diagnose an in-progress, delayed, or recently completed upgrade.",
+				"Note: any attempt to initiate an upgrade to this version (or to an older version) will be rejected by CVO — only forward upgrades to available versions are supported.",
 			},
 		}
 	}
@@ -144,6 +145,7 @@ func (c *upgradeTargetExtendedCheck) Run(ctx context.Context, deps CheckDependen
 				fmt.Sprintf("targetVersion=%s", deps.DesiredVersion),
 				fmt.Sprintf("currentChannel=%s", currentChannel),
 				"The cluster is already running the requested version. Run this report against a future target version to assess upgrade readiness.",
+				"Note: any attempt to initiate an upgrade to this version (or to an older version) will be rejected by CVO — only forward upgrades to available versions are supported.",
 			},
 		}
 	}
