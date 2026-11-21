@@ -69,6 +69,7 @@ const CheckSummary: React.FC<{ pfc: UpgradeDiagsCheck }> = ({ pfc }) => {
     [s.checksFailed,  'failed',  T.danger],
     [s.checksErrored, (s.checksErrored ?? 0) === 1 ? 'error' : 'errors', T.warning],
     [s.checksWarned,  (s.checksWarned  ?? 0) === 1 ? 'warning' : 'warnings', T.warning],
+    [s.checksSkipped, (s.checksSkipped ?? 0) === 1 ? 'skipped' : 'skipped', T.textSubtle],
   ];
 
   return (

@@ -249,6 +249,8 @@ type UpgradeDiagsCheckStatus struct {
 	ChecksFailed int `json:"checksFailed,omitempty"`
 	// +kubebuilder:validation:Optional
 	ChecksErrored int `json:"checksErrored,omitempty"`
+	// +kubebuilder:validation:Optional
+	ChecksSkipped int `json:"checksSkipped,omitempty"`
 
 	// Conditions exposes the run state as standard Kubernetes conditions.
 	// +kubebuilder:validation:Optional

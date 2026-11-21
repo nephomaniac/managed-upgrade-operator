@@ -56,6 +56,7 @@ export interface UpgradeDiagsCheckStatus {
   checksWarned?: number;
   checksFailed?: number;
   checksErrored?: number;
+  checksSkipped?: number;
   checks?: DiagsCheckResult[];
 }
 

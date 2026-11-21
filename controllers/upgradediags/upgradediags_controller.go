@@ -176,7 +176,7 @@ func (r *ReconcileUpgradeDiagsCheck) Reconcile(ctx context.Context, req reconcil
 
 // applyAggregates computes overall result counts and sets the Complete condition.
 func applyAggregates(status *upgradev1alpha1.UpgradeDiagsCheckStatus, checks []upgradev1alpha1.DiagsCheckResult, now metav1.Time) {
-	var passed, warned, failed, errored int
+	var passed, warned, failed, errored, skipped int
 	for _, c := range checks {
 		switch c.Result {
 		case upgradev1alpha1.CheckPassed:
@@ -187,6 +187,8 @@ func applyAggregates(status *upgradev1alpha1.UpgradeDiagsCheckStatus, checks []u
 			failed++
 		case upgradev1alpha1.CheckResultError:
 			errored++
+		case upgradev1alpha1.CheckResultSkipped:
+			skipped++
 		}
 	}
 
@@ -205,8 +207,9 @@ func applyAggregates(status *upgradev1alpha1.UpgradeDiagsCheckStatus, checks []u
 	status.ChecksWarned = warned
 	status.ChecksFailed = failed
 	status.ChecksErrored = errored
+	status.ChecksSkipped = skipped
 
-	msg := fmt.Sprintf("%d passed, %d warned, %d failed, %d errored", passed, warned, failed, errored)
+	msg := fmt.Sprintf("%d passed, %d warned, %d failed, %d errored, %d skipped", passed, warned, failed, errored, skipped)
 	status.Conditions = []metav1.Condition{{
 		Type:               upgradev1alpha1.DiagsCompleteCondition,
 		Status:             metav1.ConditionTrue,
