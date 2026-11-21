@@ -44,4 +44,5 @@ var registeredChecks = []DiagnosticsCheck{
 	// ---- OCM API checks ----
 	&ocmLimitedSupportCheck{},
 	&ocmUpgradePolicyCheck{},
+	&ocmVersionGateCheck{},
 }

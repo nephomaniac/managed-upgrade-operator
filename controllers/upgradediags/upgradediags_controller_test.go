@@ -37,9 +37,10 @@ import (
 // testPanicCheck is a check that always panics — used to exercise runCheck panic recovery.
 type testPanicCheck struct{}
 
-func (c *testPanicCheck) Name() string                 { return "TestPanic" }
-func (c *testPanicCheck) Description() string           { return "always panics" }
-func (c *testPanicCheck) DefaultTimeout() time.Duration { return 0 }
+func (c *testPanicCheck) Name() string                  { return "TestPanic" }
+func (c *testPanicCheck) Description() string            { return "always panics" }
+func (c *testPanicCheck) DefaultTimeout() time.Duration  { return 0 }
+func (c *testPanicCheck) UpgradePhase() string           { return "pre-checks" }
 func (c *testPanicCheck) DefaultOwner() upgradev1alpha1.CheckOwner {
 	return upgradev1alpha1.OwnerServiceTeam
 }

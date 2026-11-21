@@ -101,6 +101,36 @@ func (mr *MockOcmClientMockRecorder) GetLimitedSupportReasons(arg0 any) *gomock.
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetLimitedSupportReasons", reflect.TypeOf((*MockOcmClient)(nil).GetLimitedSupportReasons), arg0)
 }
 
+// GetVersionGates mocks base method.
+func (m *MockOcmClient) GetVersionGates(arg0 string) ([]*v1.VersionGate, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetVersionGates", arg0)
+	ret0, _ := ret[0].([]*v1.VersionGate)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetVersionGates indicates an expected call of GetVersionGates.
+func (mr *MockOcmClientMockRecorder) GetVersionGates(arg0 any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetVersionGates", reflect.TypeOf((*MockOcmClient)(nil).GetVersionGates), arg0)
+}
+
+// GetVersionGateAgreements mocks base method.
+func (m *MockOcmClient) GetVersionGateAgreements(arg0 string) ([]*v1.VersionGateAgreement, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetVersionGateAgreements", arg0)
+	ret0, _ := ret[0].([]*v1.VersionGateAgreement)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetVersionGateAgreements indicates an expected call of GetVersionGateAgreements.
+func (mr *MockOcmClientMockRecorder) GetVersionGateAgreements(arg0 any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetVersionGateAgreements", reflect.TypeOf((*MockOcmClient)(nil).GetVersionGateAgreements), arg0)
+}
+
 // PostServiceLog mocks base method.
 func (m *MockOcmClient) PostServiceLog(arg0 *ocm.ServiceLog, arg1 string) error {
 	m.ctrl.T.Helper()

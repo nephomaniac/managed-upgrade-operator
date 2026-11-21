@@ -53,6 +53,8 @@ type OcmClient interface {
 	GetClusterUpgradePolicies(clusterId string) (*cmv1.UpgradePoliciesListResponse, error)
 	GetClusterUpgradePolicyState(policyId string, clusterId string) (*cmv1.UpgradePolicyState, error)
 	GetLimitedSupportReasons(clusterId string) ([]*cmv1.LimitedSupportReason, error)
+	GetVersionGates(versionPrefix string) ([]*cmv1.VersionGate, error)
+	GetVersionGateAgreements(clusterId string) ([]*cmv1.VersionGateAgreement, error)
 	PostServiceLog(sl *ServiceLog, description string) error
 	SetState(value string, description string, policyId string, clusterId string) error
 }
@@ -256,6 +258,51 @@ func (s *ocmClient) GetLimitedSupportReasons(clusterId string) ([]*cmv1.LimitedS
 		return true
 	})
 	return reasons, nil
+}
+
+// GetVersionGates returns all version gates whose prefix matches versionPrefix (e.g. "4.23").
+func (s *ocmClient) GetVersionGates(versionPrefix string) ([]*cmv1.VersionGate, error) {
+	search := fmt.Sprintf("version_raw_id_prefix like '%s%%'", versionPrefix)
+	response, err := s.conn.ClustersMgmt().V1().VersionGates().
+		List().
+		Search(search).
+		Size(100).
+		Send()
+	if err != nil {
+		return nil, fmt.Errorf("can't list version gates for prefix %s: %w", versionPrefix, err)
+	}
+	if response.Status() >= 400 {
+		return nil, fmt.Errorf("received error code %v listing version gates for prefix %s", response.Status(), versionPrefix)
+	}
+	var gates []*cmv1.VersionGate
+	response.Items().Each(func(g *cmv1.VersionGate) bool {
+		gates = append(gates, g)
+		return true
+	})
+	return gates, nil
+}
+
+// GetVersionGateAgreements returns all version gate agreements for a cluster (gates already acked).
+func (s *ocmClient) GetVersionGateAgreements(clusterId string) ([]*cmv1.VersionGateAgreement, error) {
+	response, err := s.conn.ClustersMgmt().V1().
+		Clusters().
+		Cluster(clusterId).
+		GateAgreements().
+		List().
+		Size(100).
+		Send()
+	if err != nil {
+		return nil, fmt.Errorf("can't list gate agreements for cluster %s: %w", clusterId, err)
+	}
+	if response.Status() >= 400 {
+		return nil, fmt.Errorf("received error code %v listing gate agreements for cluster %s", response.Status(), clusterId)
+	}
+	var agreements []*cmv1.VersionGateAgreement
+	response.Items().Each(func(a *cmv1.VersionGateAgreement) bool {
+		agreements = append(agreements, a)
+		return true
+	})
+	return agreements, nil
 }
 
 // PostServiceLog allows to send a generic servicelog to a cluster.

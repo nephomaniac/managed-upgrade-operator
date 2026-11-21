@@ -269,6 +269,16 @@ func (s *ocmClient) PostServiceLog(sl *ocm.ServiceLog, description string) error
 	return nil
 }
 
+// GetVersionGates is not supported by the OCM Agent client.
+func (s *ocmClient) GetVersionGates(versionPrefix string) ([]*cmv1.VersionGate, error) {
+	return nil, fmt.Errorf("GetVersionGates is not supported by the OCM Agent client")
+}
+
+// GetVersionGateAgreements is not supported by the OCM Agent client.
+func (s *ocmClient) GetVersionGateAgreements(clusterId string) ([]*cmv1.VersionGateAgreement, error) {
+	return nil, fmt.Errorf("GetVersionGateAgreements is not supported by the OCM Agent client")
+}
+
 // GetLimitedSupportReasons is not supported by the OCM Agent client.
 // The OCM Agent is an in-cluster proxy that exposes only a subset of OCM APIs;
 // Limited Support reasons are not part of that subset. Use the full OCM client instead.
