@@ -51,6 +51,19 @@ func (c *upgradeTargetCheck) Run(ctx context.Context, deps CheckDependencies, lo
 		}
 	}
 
+	currentVersion, _ := cv.GetCurrentVersion(clusterVersion)
+	if currentVersion != "" && deps.DesiredVersion == currentVersion {
+		return CheckOutput{
+			Result:  upgradev1alpha1.CheckResultSkipped,
+			Summary: fmt.Sprintf("Target version %s matches the current cluster version — upgrade path validation is not applicable", deps.DesiredVersion),
+			Findings: []string{
+				fmt.Sprintf("currentVersion=%s", currentVersion),
+				fmt.Sprintf("targetVersion=%s", deps.DesiredVersion),
+				"The cluster is already running the requested version. This report may have been run to assess cluster health or diagnose an in-progress, delayed, or recently completed upgrade.",
+			},
+		}
+	}
+
 	result, err := validation.ValidateUpgradeTarget(deps.DesiredVersion, deps.DesiredChannel, clusterVersion, logger)
 	if err != nil {
 		if result.IsValid {
@@ -121,6 +134,20 @@ func (c *upgradeTargetExtendedCheck) Run(ctx context.Context, deps CheckDependen
 
 	currentVersion, _ := cv.GetCurrentVersion(clusterVersion)
 	currentChannel := clusterVersion.Spec.Channel
+
+	if currentVersion != "" && deps.DesiredVersion == currentVersion {
+		return CheckOutput{
+			Result:  upgradev1alpha1.CheckResultSkipped,
+			Summary: fmt.Sprintf("Target version %s matches the current cluster version — extended upgrade target assessment is not applicable", deps.DesiredVersion),
+			Findings: []string{
+				fmt.Sprintf("currentVersion=%s", currentVersion),
+				fmt.Sprintf("targetVersion=%s", deps.DesiredVersion),
+				fmt.Sprintf("currentChannel=%s", currentChannel),
+				"The cluster is already running the requested version. Run this report against a future target version to assess upgrade readiness.",
+			},
+		}
+	}
+
 	upgradeType := classifyUpgradeType(currentVersion, deps.DesiredVersion, deps.DesiredChannel)
 
 	findings := []string{
